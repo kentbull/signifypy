@@ -113,6 +113,42 @@ def test_registries_create_uses_nb_trait_for_backerless_registry():
     assert path == "/identifiers/aid1/registries"
     assert body["vcp"]["c"] == ["NB"]
 
+
+def test_registries_list(make_mock_response):
+    from signify.app.clienting import SignifyClient
+    mock_client = mock(spec=SignifyClient, strict=True)
+
+    payload = [{"name": "reg1", "regk": "ERegk123"}]
+    mock_response = make_mock_response({"json": lambda: payload})
+    expect(mock_client, times=1).get("/identifiers/aid1/registries").thenReturn(mock_response)
+
+    from signify.app.credentialing import Registries
+    out = Registries(client=mock_client).list("aid1")
+
+    assert out == payload
+
+
+def test_registries_sync(make_mock_response):
+    from signify.app.clienting import SignifyClient
+    mock_client = mock(spec=SignifyClient, strict=True)
+
+    payload = {"name": "regsync.EGroup123", "done": False}
+    mock_response = make_mock_response({"json": lambda: payload})
+    expect(mock_client, times=1).post(
+        "/identifiers/aid1/registries/sync",
+        json={},
+    ).thenReturn(mock_response)
+    expect(mock_client, times=1).post(
+        "/identifiers/aid1/registries/sync",
+        json={"source": "Esource123"},
+    ).thenReturn(mock_response)
+
+    from signify.app.credentialing import Registries
+
+    registries = Registries(client=mock_client)
+    assert registries.sync("aid1") == payload
+    assert registries.sync("aid1", source="Esource123") == payload
+
 def test_credentials_list(make_mock_response):
     from signify.app.clienting import SignifyClient
     mock_client = mock(spec=SignifyClient, strict=True)
@@ -140,6 +176,32 @@ def test_credentials_export(make_mock_response):
     out = Credentials(client=mock_client).export('a_said')  # type: ignore
 
     assert out == 'things I found'
+
+
+def test_credentials_sync(make_mock_response):
+    from signify.app.clienting import SignifyClient
+    mock_client = mock(spec=SignifyClient, strict=True)
+
+    payload = {"name": "credsync.EGroup123", "done": False}
+    mock_response = make_mock_response({"json": lambda: payload})
+    expect(mock_client, times=1).post(
+        "/identifiers/group/credentials/sync",
+        json={"saids": ["Ecred123"]},
+    ).thenReturn(mock_response)
+    expect(mock_client, times=1).post(
+        "/identifiers/group/credentials/sync",
+        json={"saids": ["Ecred123", "Ecred456"], "source": "Esource123"},
+    ).thenReturn(mock_response)
+
+    from signify.app.credentialing import Credentials
+
+    credentials = Credentials(client=mock_client)
+    assert credentials.sync("group", ["Ecred123"]) == payload
+    assert (
+        credentials.sync("group", ["Ecred123", "Ecred456"], source="Esource123")
+        == payload
+    )
+
 
 def test_credentials_create(make_mock_client_with_manager, make_mock_response):
     mock_client, mock_manager = make_mock_client_with_manager()
@@ -193,6 +255,66 @@ def test_credentials_create(make_mock_client_with_manager, make_mock_response):
     assert iss.said == "EE8yncw1LCyBVtZPtozAFi7qvGn9dRPwTbuq--ulOAtB"
     assert ixn.said == "EC5KxyucpxnOpIpHe2QUPs9YeH1yGvkALg8NcWLYFe6a"
     assert op == {'v': 'ACDC10JSON00014c_'}
+
+
+def test_credentials_revoke_uses_supplied_timestamp(
+    make_mock_client_with_manager, make_mock_response
+):
+    mock_client, mock_manager = make_mock_client_with_manager()
+
+    from signify.core import keeping
+
+    mock_hab = {
+        "prefix": "ELI7pg979AdhmvrjDeam2eAO2SR5niCgnjAJXJHtJose",
+        "name": "aid1",
+        "state": {"s": "1", "d": "ABCDEFG"},
+    }
+    credential_said = "EK2xYrVkfJJHvlGhP79sfEPvQGmkFPPNAj-bjI5oHy7m"
+    registry_said = "EKRg7i8jS4O6BYUYiQG7X8YiMYdDXdw28tJRhFndCdGF"
+    prior_dig = "EE8yncw1LCyBVtZPtozAFi7qvGn9dRPwTbuq--ulOAtB"
+    dt = "2023-09-27T16:27:14.376928+00:00"
+
+    mock_keeper = mock(
+        {"algo": "salty", "params": lambda: {"keeper": "params"}},
+        spec=keeping.SaltyKeeper,
+        strict=True,
+    )
+    mock_identifiers = mock(strict=True)
+    expect(mock_client, times=1).identifiers().thenReturn(mock_identifiers)
+    expect(mock_identifiers, times=1).get("aid1").thenReturn(mock_hab)
+    expect(mock_client, times=1).get(f"/credentials/{credential_said}").thenReturn(
+        make_mock_response(
+            {
+                "json": lambda: {
+                    "sad": {"d": credential_said, "ri": registry_said},
+                    "status": {"d": prior_dig},
+                }
+            }
+        )
+    )
+    expect(mock_manager, times=1).get(aid=mock_hab).thenReturn(mock_keeper)
+    expect(mock_keeper, times=1).sign(ser=ANY()).thenReturn(["a signature"])
+
+    mock_response = make_mock_response({"json": lambda: {"done": False}})
+    expect(mock_client, times=1).delete(
+        f"/identifiers/aid1/credentials/{credential_said}",
+        body=ANY(),
+    ).thenReturn(mock_response)
+
+    from signify.app.credentialing import Credentials
+
+    rserder, anc, sigs, op = Credentials(client=mock_client).revoke(
+        "aid1",
+        credential_said,
+        timestamp=dt,
+    )
+
+    assert rserder.ked["dt"] == dt
+    assert rserder.ked["ri"] == registry_said
+    assert rserder.ked["p"] == prior_dig
+    assert anc.ked["a"] == [{"i": credential_said, "s": "1", "d": rserder.said}]
+    assert sigs == ["a signature"]
+    assert op == {"done": False}
 
 def test_ipex_grant():
     from signify.app.clienting import SignifyClient

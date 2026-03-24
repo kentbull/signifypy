@@ -1693,20 +1693,33 @@ def revoke_multisig_credential(
     approval first, then the test waits operations and asserts one converged
     credential TEL state.
 
-    On the non-initiator path, the stored `/multisig/rev` request is returned
-    so the test can assert that participant B is joining the exact `rev` and
-    `anc` proposal participant A sent.
+    On the non-initiator path, the stored `/multisig/rev` request is the
+    canonical proposal. Participant B must sign and submit that exact `rev`
+    and `anc` pair instead of reconstructing a fresh local revocation event.
     """
     if not is_initiator and request is None:
         _, request = wait_for_multisig_request(client, "/multisig/rev")
 
     local_member = client.identifiers().get(local_member_name)
     group_hab = client.identifiers().get(group_name)
-    rserder, anc, sigs, operation = client.credentials().revoke(
-        group_name,
-        credential_said,
-        timestamp=timestamp,
-    )
+    if request is not None:
+        proposal = request[0]["exn"]["e"]
+        rserder = serdering.SerderKERI(sad=proposal["rev"])
+        anc = serdering.SerderKERI(sad=proposal["anc"])
+        keeper = client.manager.get(aid=group_hab)
+        sigs = keeper.sign(ser=anc.raw)
+        body = dict(rev=rserder.ked, ixn=anc.ked, sigs=sigs)
+        body[keeper.algo] = keeper.params()
+        operation = client.delete(
+            f"/identifiers/{group_name}/credentials/{credential_said}",
+            body=body,
+        ).json()
+    else:
+        rserder, anc, sigs, operation = client.credentials().revoke(
+            group_name,
+            credential_said,
+            timestamp=timestamp,
+        )
     client.exchanges().send(
         local_member_name,
         "multisig",

@@ -39,6 +39,17 @@ class Registries:
         res = self.client.get(f"/identifiers/{name}/registries/{registryName}")
         return res.json()
 
+    def list(self, name):
+        """List credential registries visible under one identifier alias."""
+        res = self.client.get(f"/identifiers/{name}/registries")
+        return res.json()
+
+    def sync(self, name, source=None):
+        """Trigger explicit registry catch-up for a late-joined multisig member."""
+        body = {} if source is None else {"source": source}
+        res = self.client.post(f"/identifiers/{name}/registries/sync", json=body)
+        return res.json()
+
     def create(self, hab, registryName, noBackers=True, estOnly=False, baks=None, toad=0, nonce=None):
         """Create and submit a new credential registry inception request.
 
@@ -180,6 +191,14 @@ class Credentials:
 
         res = self.client.get(f"/credentials/{said}", headers=headers)
         return res.content
+
+    def sync(self, name, saids, source=None):
+        """Trigger explicit credential-history catch-up for a late-joined multisig member."""
+        body = {"saids": saids}
+        if source is not None:
+            body["source"] = source
+        res = self.client.post(f"/identifiers/{name}/credentials/sync", json=body)
+        return res.json()
 
     def get(self, said):
         """Fetch one credential in JSON form, including its current TEL status."""
@@ -416,7 +435,7 @@ class Ipex:
 
         Parameters:
             name (str): human readable identifier alias to send from
-            exn (bytes): stream byte string of peer-to-peer message to send
+            exn (dict): stream byte string of peer-to-peer message to send
             admit (bytes): stream byte string of admit exn message
             recp (list[string]): qb64 recipient AID
 

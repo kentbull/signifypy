@@ -369,13 +369,14 @@ def test_multisig_issuer_credential_revocation(client_factory):
         is_initiator=True,
     )
     _, revoke_request_b = wait_for_multisig_request(issuer_client_b, "/multisig/rev")
+    joiner_timestamp = helping.nowIso8601()
     revoke_serder_b, revoke_anc_b, _, revoke_operation_b, revoke_request_b = revoke_multisig_credential(
         issuer_client_b,
         local_member_name=issuer_member_b_name,
         group_name=issuer_group_name,
         other_member_prefixes=[issuer_member_a["prefix"]],
         credential_said=creder_a.said,
-        timestamp=revoke_timestamp,
+        timestamp=joiner_timestamp,
         request=revoke_request_b,
     )
     wait_for_operation(issuer_client_a, revoke_operation_a)
@@ -389,10 +390,14 @@ def test_multisig_issuer_credential_revocation(client_factory):
     )
 
     # The stored `/multisig/rev` request is the canonical proposal participant
-    # B joins. Matching local reconstruction proves both members revoked the
-    # same credential with the same anchoring event.
+    # B joins. The joiner timestamp is intentionally different to prove it does
+    # not locally regenerate a fresh revocation proposal.
+    assert joiner_timestamp != revoke_timestamp
+    assert revoke_request_b[0]["exn"]["e"]["rev"]["dt"] == revoke_timestamp
     assert revoke_request_b[0]["exn"]["e"]["rev"] == revoke_serder_a.ked
     assert revoke_request_b[0]["exn"]["e"]["anc"] == revoke_anc_a.ked
+    assert revoke_serder_a.ked["dt"] == revoke_timestamp
+    assert revoke_serder_b.ked["dt"] == revoke_timestamp
     assert revoke_serder_b.ked == revoke_serder_a.ked
     assert revoke_anc_b.ked == revoke_anc_a.ked
     assert issued_a["sad"]["d"] == creder_a.said
