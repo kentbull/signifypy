@@ -817,6 +817,26 @@ def test_signify_client_delegations(make_signify_client):
     assert out.client == client
 
 
+def test_signify_client_didwebs(make_signify_client):
+    client = make_signify_client()
+
+    out = client.didwebs()
+
+    from signify.app.didwebing import DidWebs
+    assert type(out) is DidWebs
+    assert out.client == client
+
+
+def test_signify_client_signals(make_signify_client):
+    client = make_signify_client()
+
+    out = client.signals()
+
+    from signify.app.signaling import AgentSignals
+    assert type(out) is AgentSignals
+    assert out.client == client
+
+
 def test_signify_client_registries(make_signify_client):
     client = make_signify_client()
 
@@ -972,7 +992,42 @@ def test_signify_auth():
         'Signify-Timestamp': 'now ISO8601!',
         'Content-Length': 11
     }
-    expect(mock_authenticator, times=1).sign({'Signify-Resource': 'a prefix', 'Signify-Timestamp': 'now ISO8601!', 'Content-Length': 14}, 'GET', '/my_path').thenReturn({'headers': 'modified'})
+    expect(mock_authenticator, times=1).sign(
+        {'Signify-Resource': 'a prefix', 'Signify-Timestamp': 'now ISO8601!', 'Content-Length': 14},
+        'GET',
+        '/my_path',
+    ).thenReturn({'headers': 'modified'})
+
+    out = signify_auth.__call__(mock_request)
+    assert out.headers == {'headers': 'modified'}
+
+    unstub()
+    verifyNoUnwantedInteractions()
+
+
+def test_signify_auth_quotes_signed_path():
+    from signify.core import authing
+    mock_controller = mock({'pre': 'a prefix'}, spec=authing.Controller, strict=True)
+    mock_authenticator = mock({'ctrl': mock_controller}, spec=authing.Authenticater, strict=True)
+
+    from signify.app.clienting import SignifyAuth
+    signify_auth = SignifyAuth(mock_authenticator)
+
+    import requests
+    mock_request = mock({
+        'method': 'GET',
+        'url': 'http://example.com/identifiers/name/registries/did:webs_designated_aliases:Eaid',
+        'headers': {},
+        'body': None,
+    }, spec=requests.Request, strict=True)
+
+    from keri.help import helping
+    expect(helping).nowIso8601().thenReturn('now ISO8601!')
+    expect(mock_authenticator, times=1).sign(
+        {'Signify-Resource': 'a prefix', 'Signify-Timestamp': 'now ISO8601!'},
+        'GET',
+        '/identifiers/name/registries/did%3Awebs_designated_aliases%3AEaid',
+    ).thenReturn({'headers': 'modified'})
 
     out = signify_auth.__call__(mock_request)
     assert out.headers == {'headers': 'modified'}

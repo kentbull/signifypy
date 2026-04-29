@@ -54,6 +54,39 @@ signify.app.delegating
 .. automodule:: signify.app.delegating
    :members:
 
+signify.app.signaling
+---------------------
+
+``signify.app.signaling`` is the generic KERIA agent signaling API for
+SignifyPy. It is deliberately separate from topic helpers such as did:webs.
+
+Ownership boundary:
+
+- ``AgentSignals`` opens the authenticated ``GET /signals/stream`` SSE stream.
+- ``AgentSignals`` verifies KERIA agent-signed KERI ``rpy`` envelopes.
+- Topic modules interpret event names, expected reply routes, and payloads.
+- Topic modules also own durable polling fallback because SSE delivery is
+  transient.
+
+For did:webs publication, a live event should be verified with
+``client.signals().verifyReplyEnvelope(envelope, route=DIDWEBS_SIGNING_ROUTE)``
+before auto-approval. A disconnected client should recover through
+``client.didwebs().requests()``.
+
+.. automodule:: signify.app.signaling
+   :members:
+
+signify.app.didwebing
+---------------------
+
+``signify.app.didwebing`` owns did:webs publication request polling and
+approval. It does not own SSE transport. KERIA coordinates publication for
+managed AIDs, but the Signify edge client remains the signer for registry
+creation and designated-alias ACDC issuance.
+
+.. automodule:: signify.app.didwebing
+   :members:
+
 signify.app.exchanging
 ----------------------
 
