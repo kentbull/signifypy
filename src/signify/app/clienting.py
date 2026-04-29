@@ -419,6 +419,16 @@ class SignifyClient:
         from signify.app.schemas import Schemas
         return Schemas(client=self)
 
+    def didwebs(self):
+        """Return the did:webs publication request resource wrapper."""
+        from signify.app.didwebing import DidWebs
+        return DidWebs(client=self)
+
+    def signals(self):
+        """Return the generic KERIA agent signaling resource wrapper."""
+        from signify.app.signaling import AgentSignals
+        return AgentSignals(client=self)
+
     def config(self):
         """Return the agent-configuration read resource wrapper."""
         from signify.app.coring import Config

@@ -38,6 +38,25 @@ Run the fast test suite with:
 make test
 ```
 
+### Agent signaling
+
+KERIA can publish transient server-sent events for the connected agent at
+`GET /signals/stream`. SignifyPy exposes this generic channel through
+`client.signals()`.
+
+The signaling API is deliberately separate from topic APIs:
+
+- `client.signals().stream()` opens the authenticated SSE stream.
+- `client.signals().verifyReplyEnvelope(envelope, route=...)` verifies that the
+  SSE payload is a KERI `rpy` envelope signed by the connected KERIA agent AID.
+- Topic resources own durable fallback and approval behavior. For did:webs,
+  use `client.didwebs().requests()`, `client.didwebs().request(id)`, and
+  `client.didwebs().approve(request)`.
+
+SSE delivery is not durable. A client that is offline or disconnected must poll
+the relevant topic endpoint. For did:webs publication, the durable fallback is
+`/didwebs/signing/requests`.
+
 ### Packaging
 
 ```bash
