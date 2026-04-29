@@ -424,6 +424,11 @@ class SignifyClient:
         from signify.app.didwebing import DidWebs
         return DidWebs(client=self)
 
+    def w3c(self):
+        """Return the W3C projection session resource wrapper."""
+        from signify.app.w3cing import W3C
+        return W3C(client=self)
+
     def signals(self):
         """Return the generic KERIA agent signaling resource wrapper."""
         from signify.app.signaling import AgentSignals
