@@ -125,6 +125,8 @@ def main() -> None:
         edges=source_edges("qvi", qvi_cred["received"]),
         rules=le_rules(),
     )
+    le_did = wait_for_didwebs_ready(le.client, le.name, le.aid, timeout=args.didwebs_timeout)
+
     log("issuing VRD Auth credential from LE to QVI")
     vrd_auth = issue_and_admit(
         issuer=le,
@@ -134,7 +136,7 @@ def main() -> None:
         data={
             "i": qvi.aid,
             "AID": le.aid,
-            "DID": wait_for_didwebs_ready(le.client, le.name, le.aid, timeout=args.didwebs_timeout),
+            "DID": le_did,
             "HeadquartersAddress": LEGAL_ADDRESS,
             "LegalName": LEGAL_NAME,
         },
@@ -150,7 +152,7 @@ def main() -> None:
         data={
             "i": le.aid,
             "AID": le.aid,
-            "DID": qvi_did,
+            "DID": le_did,
             "HeadquartersAddress": LEGAL_ADDRESS,
             "LegalName": LEGAL_NAME,
         },
