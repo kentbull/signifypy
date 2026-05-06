@@ -38,6 +38,18 @@ Run the fast test suite with:
 make test
 ```
 
+### did:webs and W3C Crosswalk Helpers
+
+This branch adds client helpers for KERIA did:webs publication and W3C
+projection workflows:
+
+- `client.didwebs()` polls and approves did:webs signing requests.
+- `client.w3c()` creates W3C projection sessions and submits edge signatures.
+
+These topic helpers depend on the generic `client.signals()` SSE channel for
+transient agent requests. Durable recovery remains topic-specific through the
+did:webs and W3C request endpoints.
+
 ### Packaging
 
 ```bash
