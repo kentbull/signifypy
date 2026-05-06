@@ -54,6 +54,18 @@ signify.app.delegating
 .. automodule:: signify.app.delegating
    :members:
 
+signify.app.didwebing
+---------------------
+
+``signify.app.didwebing`` owns did:webs publication request polling and
+approval. KERIA coordinates publication for managed AIDs, but the Signify edge
+client remains the signer for registry creation and designated-alias ACDC
+issuance. Live request notification is received through the inherited
+``client.signals()`` agent signaling channel.
+
+.. automodule:: signify.app.didwebing
+   :members:
+
 signify.app.exchanging
 ----------------------
 
@@ -88,4 +100,15 @@ signify.app.notifying
 ---------------------
 
 .. automodule:: signify.app.notifying
+    :members:
+
+signify.app.w3cing
+------------------
+
+``signify.app.w3cing`` owns W3C projection sessions, edge-signature
+submission, and local dedupe for W3C signing requests. It relies on
+``client.signals()`` for transient KERIA request notification while keeping
+durable polling and approval behavior in the W3C topic API.
+
+.. automodule:: signify.app.w3cing
     :members:
