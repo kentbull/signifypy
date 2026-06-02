@@ -16,6 +16,7 @@ from signify.app.w3cing import (
     W3C_DEDUPE_REJECTED,
     W3C_DEDUPE_SUBMITTED,
     W3C_DEDUPE_TERMINAL_RETENTION_SECONDS,
+    W3C_GRANT_ROUTE,
     W3C_IMPORT_PENDING,
     W3C_IMPORT_ROUTE,
     W3C_PURPOSE_HOLDER_VP_JWT,
@@ -170,6 +171,59 @@ def test_w3c_api_uses_holder_workflow_routes():
         "/identifiers/le/w3c/present-txs/tx-id/signatures",
         {"json": {"signature": "holder-signature"}},
     ) in client.calls
+
+
+def test_w3c_api_delivers_finalized_issuance_as_signed_grant_exn():
+    client = FakeClient(
+        responses={
+            ("post", "/identifiers/qvi/w3c/credentials/issuance-id/grant"): {
+                "issuanceId": "issuance-id",
+                "state": "grant_sent",
+                "grantSaid": "grant-said",
+            }
+        }
+    )
+
+    result = W3C(client).deliverIssuance(
+        "qvi",
+        {
+            "issuanceId": "issuance-id",
+            "issuerName": "qvi",
+            "issuerAid": "Eqvi",
+            "holderAid": "Ele",
+            "sourceCredentialSaid": "credential-said",
+            "schemaSaid": "schema-said",
+            "issuerDid": "did:webs:example.com:dws:Eqvi",
+            "holderDid": "did:webs:example.com:dws:Ele",
+            "profile": "gleif-vrd-isomer-v1",
+            "state": "delivery_pending",
+            "statusUrl": "http://status.example/w3c/vc/status/credential-said",
+            "vcJwt": "vc.jwt.token",
+        },
+    )
+
+    assert result == {
+        "issuanceId": "issuance-id",
+        "state": "grant_sent",
+        "grantSaid": "grant-said",
+    }
+    grant_calls = [
+        call
+        for call in client.calls
+        if call[0] == "post" and call[1] == "/identifiers/qvi/w3c/credentials/issuance-id/grant"
+    ]
+    assert len(grant_calls) == 1
+    body = grant_calls[0][2]["json"]
+    assert body["rec"] == ["Ele"]
+    assert body["sigs"] == ["edge-signature"]
+    assert body["exn"]["r"] == W3C_GRANT_ROUTE
+    assert body["exn"]["i"] == "Eqvi"
+    assert body["exn"]["rp"] == "Ele"
+    assert body["exn"]["a"]["i"] == "Ele"
+    assert body["exn"]["a"]["holderAid"] == "Ele"
+    assert body["exn"]["a"]["issuerAid"] == "Eqvi"
+    assert body["exn"]["a"]["issuanceId"] == "issuance-id"
+    assert body["exn"]["a"]["vcJwt"] == "vc.jwt.token"
 
 
 def test_w3c_polls_all_local_identifiers_and_filters_signing_purpose():

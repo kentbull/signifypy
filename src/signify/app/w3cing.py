@@ -5,6 +5,11 @@ This module is a thin edge-client helper over KERIA's holder-centered W3C
 routes. KERIA owns orchestration records and verifier submission. SignifyPy
 verifies signed SSE envelopes, polls durable KERIA queues, dedupes local
 automation, and signs only bytes requested for locally owned managed AIDs.
+
+The Python headless wallet uses this module as the browserless equivalent of
+the React/SignifyTS edge runtime: it talks to live KERIA, signs at the edge,
+and validates holder presentation against live verifier services rather than
+test-double verifier callables.
 """
 
 import base64
@@ -12,9 +17,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from keri.db import dbing, koming
+from signify.app.exchanging import Exchanges
 
 W3C_SIGN_ROUTE = "/w3c/signing/request"
 W3C_IMPORT_ROUTE = "/w3c/credentials/import-request"
+W3C_GRANT_ROUTE = "/w3c/vc/grant"
 
 W3C_SIGNING_ACTION = "signing"
 W3C_IMPORT_ACTION = "import"
@@ -53,7 +60,13 @@ W3C_IMPORT_EXPIRED = "expired"
 
 
 class W3C:
-    """Client helper for KERIA W3C issuer, holder, and presentation routes."""
+    """Client helper for KERIA W3C issuer, holder, and presentation routes.
+
+    The method surface mirrors SignifyTS. Methods stage or read durable KERIA
+    workflow state; they do not sign. Pair this helper with
+    ``W3CEdgeAutomator`` or an explicit edge signing loop when a workflow needs
+    to advance issuance, import/admit, or presentation requests.
+    """
 
     def __init__(self, client):
         self.client = client
@@ -91,6 +104,48 @@ class W3C:
             json={},
         ).json()
 
+    def deliverIssuance(self, name, issuance):
+        """Sign and submit the issuer grant EXN for holder delivery.
+
+        This signs only the KERI EXN transport event with the local issuer
+        keeper. The VC-JWT must already have been edge-signed through KERIA's
+        W3C signing-request flow.
+        """
+        issuance_id = _required_string(issuance.get("issuanceId") or issuance.get("d"), "W3C issuance id")
+        holder_aid = _required_string(issuance.get("holderAid"), "W3C issuance holder AID")
+        issuer_aid = _required_string(issuance.get("issuerAid"), "W3C issuance issuer AID")
+        vc_jwt = _required_string(issuance.get("vcJwt"), "W3C issuance VC-JWT")
+        sender = self.client.identifiers().get(name)
+        if sender.get("prefix") != issuer_aid:
+            raise ValueError(
+                f"W3C issuance {issuance_id} belongs to {issuer_aid}, not {sender.get('prefix') or name}"
+            )
+        payload = {
+            "holderAid": holder_aid,
+            "holderDid": _required_string(issuance.get("holderDid"), "W3C issuance holder DID"),
+            "issuerAid": issuer_aid,
+            "issuerDid": _required_string(issuance.get("issuerDid"), "W3C issuance issuer DID"),
+            "sourceCredentialSaid": _required_string(
+                issuance.get("sourceCredentialSaid"), "W3C issuance source credential SAID"
+            ),
+            "schemaSaid": _required_string(issuance.get("schemaSaid"), "W3C issuance schema SAID"),
+            "issuanceId": issuance_id,
+            "vcJwt": vc_jwt,
+            "statusUrl": _required_string(issuance.get("statusUrl"), "W3C issuance status URL"),
+            "profile": _required_string(issuance.get("profile"), "W3C issuance profile"),
+        }
+        exn, sigs, atc = Exchanges(self.client).createExchangeMessage(
+            sender,
+            W3C_GRANT_ROUTE,
+            payload,
+            {},
+            recipient=holder_aid,
+        )
+        return self.client.post(
+            f"/identifiers/{name}/w3c/credentials/{issuance_id}/grant",
+            json={"exn": exn.ked, "sigs": sigs, "atc": atc, "rec": [holder_aid]},
+        ).json()
+
     def backfillIssuances(self, name):
         """Ask KERIA to backfill eligible W3C issuances for one identifier."""
         return self.client.post(
@@ -99,7 +154,11 @@ class W3C:
         ).json()
 
     def signingRequests(self, name=None, includeComplete=False, purpose=None):
-        """List W3C signing requests, optionally across all local identifiers."""
+        """List W3C signing requests, optionally across all local identifiers.
+
+        Omitting ``name`` lets one headless process service every locally
+        managed edge request without pretending that KERIA owns the keys.
+        """
         names = [name] if name is not None else self._managedNames()
         requests = []
         params = {"includeComplete": "true"} if includeComplete else None
@@ -116,7 +175,7 @@ class W3C:
         return requests
 
     def submitSignature(self, request, signature):
-        """Submit one edge signature for a W3C signing request."""
+        """Submit one edge signature for KERIA verification and assembly."""
         name = request["name"]
         request_id = request.get("requestId") or request["d"]
         return self.client.post(
@@ -170,7 +229,12 @@ class W3C:
         ]
 
     def startPresentTx(self, name, requestDescriptor):
-        """Hand a runtime verifier request descriptor to KERIA."""
+        """Hand a runtime verifier request descriptor to KERIA.
+
+        KERIA performs holder credential matching here. A transaction failure
+        requiring exactly one eligible held credential indicates missing or
+        duplicate holder W3C wallet state, not a verifier service error.
+        """
         return self.client.post(
             f"/identifiers/{name}/w3c/present-txs",
             json=requestDescriptor,
@@ -196,6 +260,12 @@ class W3C:
 
     def _managedNames(self):
         return [aid["name"] for aid in self.client.identifiers().list()["aids"]]
+
+
+def _required_string(value, label):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} is required")
+    return value.strip()
 
 
 @dataclass
@@ -320,7 +390,13 @@ def recordAgeSeconds(record, now):
 
 
 class W3CEdgeAutomator:
-    """Deduped W3C edge automation over signed SSE and durable polling."""
+    """Deduped W3C edge automation over signed SSE and durable polling.
+
+    The automator verifies KERIA signal envelopes, checks local ownership,
+    applies caller policy, and signs/imports at most once per request id. SSE is
+    a low-latency nudge; polling and ``reconcile`` keep the edge aligned with
+    durable KERIA state after missed transient signals.
+    """
 
     def __init__(
         self,
@@ -373,7 +449,7 @@ class W3CEdgeAutomator:
         return self.handleImportRequest(payload, source="sse")
 
     def handleSigningRequest(self, request, source="polling"):
-        """Sign one policy-valid KERIA W3C request once."""
+        """Sign one locally owned, policy-valid KERIA W3C request once."""
         request_id = (request or {}).get("d") or (request or {}).get("requestId")
         if not request_id:
             return {
@@ -482,7 +558,11 @@ class W3CEdgeAutomator:
         return self._outcome("imported", request_id, source, record)
 
     def pollOnce(self, name=None):
-        """Fetch pending W3C import and signing requests and handle each once."""
+        """Fetch pending W3C import and signing requests and handle each once.
+
+        Imports run before signing so newly delivered credentials can reach
+        holder state before later presentation work observes the wallet.
+        """
         outcomes = [
             self.handleImportRequest(request, source="polling")
             for request in self.w3c.importRequests(name=name)
@@ -614,6 +694,7 @@ class W3CEdgeAutomator:
         return "W3C import request was not approved"
 
     def _signRequest(self, request):
+        """Sign the exact KERIA-staged request bytes with the local keeper."""
         encoding = request.get("encoding", "base64url")
         if encoding != "base64url":
             raise ValueError(f"unsupported W3C signing request encoding {encoding}")
@@ -643,7 +724,12 @@ class W3CEdgeAutomator:
 
 
 def defaultSigningPolicy(request):
-    """Approve non-presentation W3C signing requests by default."""
+    """Approve issuer VC-JWT and holder-admit signing by default.
+
+    Holder VP-JWT signing is intentionally excluded. Presentation requires a
+    caller policy that rechecks the live transaction, selected credential,
+    audience, nonce, and holder binding before approving the edge signature.
+    """
     return request.get("purpose") in W3C_DEFAULT_SIGNING_PURPOSES
 
 
