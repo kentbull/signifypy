@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""Build a real Signify/KERIA GEDA -> LE VRD chain for W3C projection tests.
+"""Build a real Signify/KERIA GEDA -> LE VRD chain for W3C presentation E2E.
 
 This script is intentionally a workflow harness, not a shortcut. It talks to a
 running KERIA instance through SignifyPy, creates managed AIDs, resolves OOBIs,
 creates registries, issues the vLEI chain, admits each grant, waits for the QVI
-did:webs DID to become ready, and writes a manifest that KERIA W3C projection
-acceptance tests can consume.
+and LE did:webs DIDs to become ready, and writes a manifest that live
+holder-presentation acceptance tests can consume. KERIA may later stage W3C
+signing inputs, but the wallet edge remains responsible for every signature.
 """
 
 from __future__ import annotations
@@ -179,9 +180,21 @@ def main() -> None:
         "didwebs": {
             "qvi": qvi_did,
         },
-        "projection": {
-            "identifierName": qvi.name,
-            "credentialSaid": vrd_cred["said"],
+        "qviWallet": {
+            "name": qvi.name,
+            "aid": qvi.aid,
+            "passcode": qvi.passcode,
+        },
+        "holderWallet": {
+            "name": le.name,
+            "aid": le.aid,
+            "passcode": le.passcode,
+        },
+        "sourceCredentialSaid": vrd_cred["said"],
+        "holderPresentation": {
+            "issuerName": qvi.name,
+            "holderName": le.name,
+            "sourceCredentialSaid": vrd_cred["said"],
         },
     }
 
@@ -190,8 +203,8 @@ def main() -> None:
     output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"LE wallet alias: {le.name}", file=sys.stderr)
     print(f"LE wallet passcode: {le.passcode}", file=sys.stderr)
-    print(f"Projection issuer alias: {qvi.name}", file=sys.stderr)
-    print(f"Projection VRD credential SAID: {vrd_cred['said']}", file=sys.stderr)
+    print(f"W3C issuer/QVI wallet alias: {qvi.name}", file=sys.stderr)
+    print(f"Holder presentation source VRD credential SAID: {vrd_cred['said']}", file=sys.stderr)
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 
@@ -225,7 +238,7 @@ def validate_schema_oobi_base(schema_base_url: str) -> None:
 
 
 def log(message: str) -> None:
-    print(f"[setup-vrd-chain] {message}", file=sys.stderr, flush=True)
+    print(f"[setup-vrd-holder-presentation] {message}", file=sys.stderr, flush=True)
 
 
 def connect_actor(label: str, args, name: str) -> Actor:

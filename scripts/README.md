@@ -28,10 +28,13 @@ To inspect the current live-scenario coverage:
   material for integration scenarios.
 - `keri/` keeps legacy config assets that may still be useful for reference
   during future harness cleanup.
-- `setup_vrd_projection_chain.py` is an operator setup tool, not test
+- `setup_vrd_holder_presentation_chain.py` is an operator setup tool, not test
   coverage. It builds a real GEDA -> QVI -> LE -> VRD chain against a running
-  KERIA instance, writes the manifest consumed by W3C projection acceptance
-  work, and prints the LE wallet passcode for manual `signify-react-ts` login.
+  KERIA instance, writes the manifest consumed by live holder-presentation
+  acceptance work, and prints the LE holder wallet passcode for manual
+  `signify-react-ts` login. KERIA may stage exact W3C signing inputs from that
+  manifest, but every credential and presentation signature remains an edge
+  wallet signature.
 
 Verdict: do not add new integration workflows back under `scripts/`. New live
 coverage belongs under `tests/integration`.
