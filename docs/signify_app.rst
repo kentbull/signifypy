@@ -105,10 +105,11 @@ signify.app.notifying
 signify.app.w3cing
 ------------------
 
-``signify.app.w3cing`` owns W3C projection sessions, edge-signature
-submission, and local dedupe for W3C signing requests. It relies on
-``client.signals()`` for transient KERIA request notification while keeping
-durable polling and approval behavior in the W3C topic API.
+``signify.app.w3cing`` wraps KERIA holder-centered W3C endpoints for issuer
+issuance, holder import, verifier contacts, presentation transactions, and
+edge-signature submission. It relies on ``client.signals()`` for transient
+KERIA request notification while keeping durable polling, signed-envelope
+verification, and local dedupe in the W3C topic helper.
 
 .. automodule:: signify.app.w3cing
     :members:

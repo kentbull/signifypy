@@ -38,13 +38,17 @@ Run the fast test suite with:
 make test
 ```
 
-### did:webs and W3C Crosswalk Helpers
+### did:webs and W3C Holder Helpers
 
-This branch adds client helpers for KERIA did:webs publication and W3C
-projection workflows:
+This branch adds client helpers for KERIA did:webs publication and W3C holder
+automation:
 
 - `client.didwebs()` polls and approves did:webs signing requests.
-- `client.w3c()` creates W3C projection sessions and submits edge signatures.
+- `signify.app.w3cing.W3C` wraps KERIA W3C issuance, import, verifier contact,
+  presentation transaction, and signing-request endpoints.
+- `signify.app.w3cing.W3CEdgeAutomator` verifies signed W3C SSE envelopes,
+  dedupes import/signing requests by request SAID, and signs only policy-valid
+  locally owned requests.
 
 These topic helpers depend on the generic `client.signals()` SSE channel for
 transient agent requests. Durable recovery remains topic-specific through the

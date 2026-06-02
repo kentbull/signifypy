@@ -429,11 +429,6 @@ class SignifyClient:
         from signify.app.didwebing import DidWebs
         return DidWebs(client=self)
 
-    def w3c(self):
-        """Return the W3C projection session resource wrapper."""
-        from signify.app.w3cing import W3C
-        return W3C(client=self)
-
     def config(self):
         """Return the agent-configuration read resource wrapper."""
         from signify.app.coring import Config

@@ -1,53 +1,71 @@
 # -*- encoding: utf-8 -*-
-"""
-SIGNIFY W3C projection helper tests.
-"""
+"""SignifyPy W3C holder workflow helper tests."""
 
 import pytest
-from mockito import expect, mock, verifyNoUnwantedInteractions, unstub
 
 from signify.app.w3cing import (
+    MemoryW3CAutomationStore,
     W3C,
-    W3CProjectionAutoApprover,
-    MemoryW3CDedupeStore,
-    W3CDedupeRecord,
+    W3CAutomationRecord,
+    W3C_DEDUPE_BLOCKED,
     W3C_DEDUPE_COMPLETE,
     W3C_DEDUPE_FAILED,
+    W3C_DEDUPE_IMPORTED,
     W3C_DEDUPE_IN_FLIGHT,
     W3C_DEDUPE_IN_FLIGHT_RETENTION_SECONDS,
     W3C_DEDUPE_REJECTED,
     W3C_DEDUPE_SUBMITTED,
     W3C_DEDUPE_TERMINAL_RETENTION_SECONDS,
-    W3C_KIND_JWT,
-    W3C_KIND_PROOF,
+    W3C_IMPORT_PENDING,
+    W3C_IMPORT_ROUTE,
+    W3C_PURPOSE_HOLDER_VP_JWT,
+    W3C_PURPOSE_ISSUER_VC_JWT,
     W3C_SIGN_ROUTE,
+    W3CEdgeAutomator,
     b64url_decode,
 )
 
 
-def request_fixture(**overrides):
+def signing_request_fixture(**overrides):
     request = {
-        "d": "request-id",
-        "agent": "agent-aid",
-        "aid": "managed-aid",
-        "name": "aid1",
-        "kind": W3C_KIND_PROOF,
+        "d": "signing-id",
+        "requestId": "signing-id",
+        "name": "qvi",
+        "aid": "Eqvi",
+        "purpose": W3C_PURPOSE_ISSUER_VC_JWT,
+        "related": "issuance-id",
         "signingInputB64": "cGF5bG9hZA",
+        "encoding": "base64url",
+        "verificationMethod": "did:webs:example.com:dws:Eqvi#Dkey",
         "state": "pending",
-        "dt": "2021-06-27T21:26:21.233257+00:00",
     }
     request.update(overrides)
     return request
 
 
-def envelope_fixture(request=None):
-    return {
-        "rpy": {
-            "r": W3C_SIGN_ROUTE,
-            "a": request if request is not None else request_fixture(),
-        },
-        "sigs": ["signature"],
+def import_request_fixture(**overrides):
+    request = {
+        "d": "import-id",
+        "importRequestId": "import-id",
+        "holderName": "le",
+        "holderAid": "Ele",
+        "holderDid": "did:webs:example.com:dws:Ele",
+        "issuerAid": "Eqvi",
+        "issuerDid": "did:webs:example.com:dws:Eqvi",
+        "sourceCredentialSaid": "credential-said",
+        "schemaSaid": "schema-said",
+        "grantSaid": "grant-said",
+        "issuanceId": "issuance-id",
+        "statusUrl": "http://status.example/w3c/vc/status/credential-said",
+        "profile": "gleif-vrd-isomer-v1",
+        "state": W3C_IMPORT_PENDING,
     }
+    request.update(overrides)
+    return request
+
+
+def envelope_fixture(route, payload):
+    return {"rpy": {"r": route, "a": payload}, "sigs": ["agent-signature"]}
 
 
 class FakeResponse:
@@ -78,20 +96,27 @@ class FakeManager:
         return self.keeper
 
 
+class FakeIdentifiers:
+    def __init__(self, prefixes):
+        self.prefixes = prefixes
+        self.calls = []
+
+    def list(self):
+        self.calls.append(("list",))
+        return {"aids": [{"name": name} for name in self.prefixes.keys()]}
+
+    def get(self, name):
+        self.calls.append(("get", name))
+        if name not in self.prefixes:
+            raise ValueError("not found")
+        return {"name": name, "prefix": self.prefixes[name]}
+
+
 class FakeClient:
-    def __init__(
-        self,
-        requests=None,
-        verify=True,
-        prefix="managed-aid",
-        submit_error=None,
-        identifier_error=None,
-    ):
-        self.requests_payload = requests if requests is not None else []
+    def __init__(self, responses=None, verify=True, prefixes=None):
+        self.responses = responses if responses is not None else {}
         self.verify = verify
-        self.prefix = prefix
-        self.submit_error = submit_error
-        self.identifier_error = identifier_error
+        self.identifiers_resource = FakeIdentifiers(prefixes or {"qvi": "Eqvi", "le": "Ele"})
         self.manager = FakeManager()
         self.calls = []
 
@@ -103,271 +128,295 @@ class FakeClient:
         return self.verify
 
     def identifiers(self):
-        return self
+        return self.identifiers_resource
 
-    def get(self, *args, **kwargs):
-        if args and args[0].startswith("/identifiers/"):
-            self.calls.append(("requests", args, kwargs))
-            return FakeResponse({"requests": self.requests_payload})
+    def get(self, path, **kwargs):
+        self.calls.append(("get", path, kwargs))
+        payload = self.responses.get(("get", path), {})
+        return FakeResponse(payload)
 
-        name = args[0]
-        if self.identifier_error is not None:
-            raise self.identifier_error
-        self.calls.append(("identifier", name))
-        return {"prefix": self.prefix}
-
-    def post(self, *args, **kwargs):
-        if self.submit_error is not None:
-            raise self.submit_error
-        self.calls.append(("post", args, kwargs))
-        return FakeResponse({"accepted": True})
+    def post(self, path, **kwargs):
+        self.calls.append(("post", path, kwargs))
+        payload = self.responses.get(("post", path), {"accepted": True})
+        return FakeResponse(payload)
 
 
-def test_w3c_verifiers(make_mock_response):
-    client = mock(strict=True)
-    response = make_mock_response({"json": lambda: {"verifiers": ["verifier-aid"]}})
-    expect(client, times=1).get("/w3c/verifiers").thenReturn(response)
-
-    result = W3C(client).verifiers()
-
-    assert result == ["verifier-aid"]
-    verifyNoUnwantedInteractions()
-    unstub()
-
-
-def test_w3c_project(make_mock_response):
-    client = mock(strict=True)
-    response = make_mock_response({"json": lambda: {"sessionId": "session-id"}})
-    expect(client, times=1).post(
-        "/identifiers/aid1/w3c/projections",
-        json={"credentialSaid": "credential-said", "verifierId": "verifier-aid"},
-    ).thenReturn(response)
-
-    result = W3C(client).project("aid1", "credential-said", "verifier-aid")
-
-    assert result == {"sessionId": "session-id"}
-    verifyNoUnwantedInteractions()
-    unstub()
-
-
-def test_w3c_projection(make_mock_response):
-    client = mock(strict=True)
-    response = make_mock_response({"json": lambda: {"state": "ready"}})
-    expect(client, times=1).get(
-        "/identifiers/aid1/w3c/projections/session-id"
-    ).thenReturn(response)
-
-    result = W3C(client).projection("aid1", "session-id")
-
-    assert result == {"state": "ready"}
-    verifyNoUnwantedInteractions()
-    unstub()
-
-
-def test_w3c_requests_for_identifier(make_mock_response):
-    client = mock(strict=True)
-    response = make_mock_response({"json": lambda: {"requests": [{"d": "request-id"}]}})
-    expect(client, times=1).get(
-        "/identifiers/aid1/w3c/signing-requests",
-        params={"includeComplete": "true"},
-    ).thenReturn(response)
-
-    result = W3C(client).requests(name="aid1", includeComplete=True)
-
-    assert result == [{"d": "request-id"}]
-    verifyNoUnwantedInteractions()
-    unstub()
-
-
-def test_w3c_requests_for_all_managed_identifiers(make_mock_response):
-    client = mock(strict=True)
-    identifiers = mock(strict=True)
-    response1 = make_mock_response({"json": lambda: {"requests": [{"d": "one"}]}})
-    response2 = make_mock_response({"json": lambda: {"requests": [{"d": "two"}]}})
-    expect(client, times=1).identifiers().thenReturn(identifiers)
-    expect(identifiers, times=1).list().thenReturn(
-        {"aids": [{"name": "aid1"}, {"name": "aid2"}]}
+def test_w3c_api_uses_holder_workflow_routes():
+    client = FakeClient(
+        responses={
+            ("post", "/identifiers/qvi/w3c/credentials"): {"issuanceId": "issuance-id"},
+            ("get", "/identifiers/le/w3c/credentials"): {"credentials": [{"credentialId": "held-id"}]},
+            ("get", "/identifiers/le/w3c/credentials/held-id"): {"credentialId": "held-id"},
+            ("get", "/identifiers/le/w3c/verifier-contacts"): {"contacts": []},
+            ("get", "/identifiers/le/w3c/present-txs"): {"presentTxs": []},
+        }
     )
-    expect(client, times=1).get(
-        "/identifiers/aid1/w3c/signing-requests", params=None
-    ).thenReturn(response1)
-    expect(client, times=1).get(
-        "/identifiers/aid2/w3c/signing-requests", params=None
-    ).thenReturn(response2)
+    w3c = W3C(client)
 
-    result = W3C(client).requests()
+    assert w3c.startIssuance("qvi", "credential-said") == {"issuanceId": "issuance-id"}
+    assert w3c.credentials("le") == [{"credentialId": "held-id"}]
+    assert w3c.credential("le", "held-id") == {"credentialId": "held-id"}
+    assert w3c.importCredential("le", "import-id") == {"accepted": True}
+    assert w3c.verifierContacts("le") == []
+    assert w3c.createVerifierContact("le", {"origin": "https://verifier.example"}) == {"accepted": True}
+    assert w3c.presentTxs("le") == []
+    assert w3c.startPresentTx("le", {"aud": "https://verifier.example"}) == {"accepted": True}
+    assert w3c.submitPresentTxSignature("le", "tx-id", signature="holder-signature") == {"accepted": True}
 
-    assert result == [{"d": "one"}, {"d": "two"}]
-    verifyNoUnwantedInteractions()
-    unstub()
-
-
-def test_w3c_submit_signature(make_mock_response):
-    client = mock(strict=True)
-    response = make_mock_response({"json": lambda: {"state": "complete"}})
-    expect(client, times=1).post(
-        "/identifiers/aid1/w3c/signing-requests/request-id/signatures",
-        json={"signature": "edge-signature"},
-    ).thenReturn(response)
-
-    result = W3C(client).submitSignature(request_fixture(), "edge-signature")
-
-    assert result == {"state": "complete"}
-    verifyNoUnwantedInteractions()
-    unstub()
+    assert ("post", "/identifiers/qvi/w3c/credentials", {"json": {"sourceCredentialSaid": "credential-said"}}) in client.calls
+    assert ("post", "/identifiers/le/w3c/credentials/import", {"json": {"importRequestId": "import-id"}}) in client.calls
+    assert (
+        "post",
+        "/identifiers/le/w3c/present-txs/tx-id/signatures",
+        {"json": {"signature": "holder-signature"}},
+    ) in client.calls
 
 
-def test_auto_approver_signs_and_submits_sse_envelope_once():
+def test_w3c_polls_all_local_identifiers_and_filters_signing_purpose():
+    issuer = signing_request_fixture(d="issuer-request", requestId="issuer-request")
+    holder = signing_request_fixture(
+        d="holder-request",
+        requestId="holder-request",
+        name="le",
+        aid="Ele",
+        purpose=W3C_PURPOSE_HOLDER_VP_JWT,
+    )
+    client = FakeClient(
+        responses={
+            ("get", "/identifiers/qvi/w3c/signing-requests"): {"requests": [issuer]},
+            ("get", "/identifiers/le/w3c/signing-requests"): {"requests": [holder]},
+            ("get", "/identifiers/qvi/w3c/credentials/import-requests"): {"requests": []},
+            ("get", "/identifiers/le/w3c/credentials/import-requests"): {"requests": [import_request_fixture()]},
+        }
+    )
+
+    requests = W3C(client).signingRequests(purpose=W3C_PURPOSE_HOLDER_VP_JWT)
+    imports = W3C(client).importRequests()
+
+    assert requests == [holder]
+    assert imports == [import_request_fixture()]
+
+
+def test_edge_automator_signs_verified_signing_request_once():
     client = FakeClient()
-    approver = W3CProjectionAutoApprover(
-        client, store=MemoryW3CDedupeStore(), now=lambda: "now"
+    automator = W3CEdgeAutomator(
+        client,
+        store=MemoryW3CAutomationStore(),
+        now=lambda: "2026-06-01T00:00:00+00:00",
     )
 
-    first = approver.handleEnvelope(envelope_fixture())
-    second = approver.handleEnvelope(envelope_fixture())
+    envelope = envelope_fixture(W3C_SIGN_ROUTE, signing_request_fixture())
+    first = automator.handleEnvelope(envelope)
+    second = automator.handleEnvelope(envelope)
 
     assert first["outcome"] == "submitted"
+    assert first["record"].status == W3C_DEDUPE_SUBMITTED
     assert second["outcome"] == "skipped"
-    assert second["record"].status == W3C_DEDUPE_SUBMITTED
     assert client.manager.keeper.calls == [(b"payload", False)]
     assert [call for call in client.calls if call[0] == "post"] == [
         (
             "post",
-            ("/identifiers/aid1/w3c/signing-requests/request-id/signatures",),
+            "/identifiers/qvi/w3c/signing-requests/signing-id/signatures",
             {"json": {"signature": "edge-signature"}},
         )
     ]
 
 
-def test_auto_approver_rejects_unverified_sse_envelope():
+def test_edge_automator_rejects_unverified_envelope():
     client = FakeClient(verify=False)
 
-    result = W3CProjectionAutoApprover(
-        client, store=MemoryW3CDedupeStore()
-    ).handleEnvelope(envelope_fixture())
+    result = W3CEdgeAutomator(
+        client, store=MemoryW3CAutomationStore()
+    ).handleEnvelope(envelope_fixture(W3C_SIGN_ROUTE, signing_request_fixture()))
 
     assert result["outcome"] == "rejected"
     assert [call[0] for call in client.calls].count("post") == 0
 
 
-def test_auto_approver_rejects_mismatched_local_aid():
-    client = FakeClient(prefix="other-aid")
-
-    result = W3CProjectionAutoApprover(
-        client, store=MemoryW3CDedupeStore()
-    ).handleRequest(request_fixture())
-
-    assert result["outcome"] == "rejected"
-    assert result["record"].status == W3C_DEDUPE_REJECTED
-    assert [call[0] for call in client.calls].count("post") == 0
-
-
-def test_auto_approver_rejects_unavailable_local_identifier():
-    client = FakeClient(identifier_error=ValueError("not found"))
-
-    result = W3CProjectionAutoApprover(
-        client, store=MemoryW3CDedupeStore()
-    ).handleRequest(request_fixture())
-
-    assert result["outcome"] == "rejected"
-    assert result["record"].status == W3C_DEDUPE_REJECTED
-    assert "unavailable: not found" in result["error"]
-    assert [call[0] for call in client.calls].count("post") == 0
-
-
-def test_auto_approver_marks_unsupported_kind_failed():
-    client = FakeClient()
-
-    result = W3CProjectionAutoApprover(
-        client, store=MemoryW3CDedupeStore()
-    ).handleRequest(request_fixture(kind="unsupported"))
-
-    assert result["outcome"] == "failed"
-    assert result["record"].status == W3C_DEDUPE_FAILED
-    assert "unsupported W3C signing request kind unsupported" in result["error"]
-
-
-def test_auto_approver_retries_stale_in_flight_records_after_active_window():
-    store = MemoryW3CDedupeStore()
-    store.put(
-        W3CDedupeRecord(
-            id="request-id",
-            aid="managed-aid",
-            kind=W3C_KIND_JWT,
-            status=W3C_DEDUPE_IN_FLIGHT,
-            updated="2021-06-27T21:00:00+00:00",
-        )
+def test_edge_automator_rejects_holder_vp_without_explicit_policy():
+    client = FakeClient(prefixes={"le": "Ele"})
+    request = signing_request_fixture(
+        name="le",
+        aid="Ele",
+        purpose=W3C_PURPOSE_HOLDER_VP_JWT,
     )
-    client = FakeClient()
 
-    result = W3CProjectionAutoApprover(
+    result = W3CEdgeAutomator(
+        client, store=MemoryW3CAutomationStore()
+    ).handleSigningRequest(request)
+
+    assert result["outcome"] == "rejected"
+    assert result["record"].status == W3C_DEDUPE_REJECTED
+    assert "not approved" in result["error"]
+    assert [call[0] for call in client.calls].count("post") == 0
+
+
+def test_edge_automator_can_sign_holder_vp_with_explicit_policy():
+    client = FakeClient(prefixes={"le": "Ele"})
+    request = signing_request_fixture(
+        name="le",
+        aid="Ele",
+        purpose=W3C_PURPOSE_HOLDER_VP_JWT,
+    )
+
+    result = W3CEdgeAutomator(
         client,
-        store=store,
-        now=lambda: "2021-06-27T21:10:00+00:00",
-        inFlightRetentionSeconds=W3C_DEDUPE_IN_FLIGHT_RETENTION_SECONDS,
-    ).handleRequest(request_fixture(kind=W3C_KIND_JWT))
+        store=MemoryW3CAutomationStore(),
+        signingPolicy=lambda _request: True,
+    ).handleSigningRequest(request)
 
     assert result["outcome"] == "submitted"
-    assert [call[0] for call in client.calls].count("post") == 1
+    assert [call for call in client.calls if call[0] == "post"] == [
+        (
+            "post",
+            "/identifiers/le/w3c/signing-requests/signing-id/signatures",
+            {"json": {"signature": "edge-signature"}},
+        )
+    ]
 
 
-def test_auto_approver_reconciles_completion_only_from_keria_state():
-    request = request_fixture(state=W3C_DEDUPE_COMPLETE)
-    pending = request_fixture(d="pending-id", state="pending")
-    client = FakeClient(requests=[request, pending])
-    store = MemoryW3CDedupeStore()
-    approver = W3CProjectionAutoApprover(client, store=store)
+def test_edge_automator_imports_verified_import_request_once():
+    client = FakeClient(prefixes={"le": "Ele"})
+    automator = W3CEdgeAutomator(client, store=MemoryW3CAutomationStore())
+    envelope = envelope_fixture(W3C_IMPORT_ROUTE, import_request_fixture())
 
-    approver.handleRequest(request_fixture())
-    records = approver.reconcile(name="aid1")
+    first = automator.handleEnvelope(envelope)
+    second = automator.handleEnvelope(envelope)
 
-    assert len(records) == 1
-    assert store.get("request-id").status == W3C_DEDUPE_COMPLETE
-    assert store.get("pending-id") is None
+    assert first["outcome"] == "imported"
+    assert first["record"].status == W3C_DEDUPE_IMPORTED
+    assert second["outcome"] == "skipped"
+    assert [call for call in client.calls if call[0] == "post"] == [
+        (
+            "post",
+            "/identifiers/le/w3c/credentials/import",
+            {"json": {"importRequestId": "import-id"}},
+        )
+    ]
+
+
+def test_edge_automator_blocks_import_when_native_vrd_missing():
+    client = FakeClient(prefixes={"le": "Ele"})
+    request = import_request_fixture(
+        state="blocked_native_vrd",
+        error="matching holder-local native VRD ACDC is missing",
+    )
+
+    result = W3CEdgeAutomator(
+        client, store=MemoryW3CAutomationStore()
+    ).handleImportRequest(request)
+
+    assert result["outcome"] == "blocked"
+    assert result["record"].status == W3C_DEDUPE_BLOCKED
+    assert "native VRD" in result["error"]
+    assert [call[0] for call in client.calls].count("post") == 0
+
+
+def test_edge_automator_rejects_mismatched_local_aid():
+    client = FakeClient(prefixes={"le": "Eother"})
+
+    result = W3CEdgeAutomator(
+        client, store=MemoryW3CAutomationStore()
+    ).handleImportRequest(import_request_fixture())
+
+    assert result["outcome"] == "rejected"
+    assert result["record"].status == W3C_DEDUPE_REJECTED
+    assert "targets Ele" in result["error"]
+    assert [call[0] for call in client.calls].count("post") == 0
+
+
+def test_edge_automator_poll_once_handles_imports_before_signing():
+    client = FakeClient(
+        responses={
+            ("get", "/identifiers/qvi/w3c/credentials/import-requests"): {"requests": []},
+            ("get", "/identifiers/le/w3c/credentials/import-requests"): {"requests": [import_request_fixture()]},
+            ("get", "/identifiers/qvi/w3c/signing-requests"): {"requests": [signing_request_fixture()]},
+            ("get", "/identifiers/le/w3c/signing-requests"): {"requests": []},
+        }
+    )
+
+    results = W3CEdgeAutomator(
+        client, store=MemoryW3CAutomationStore()
+    ).pollOnce()
+
+    assert [result["outcome"] for result in results] == ["imported", "submitted"]
+    assert [call[1] for call in client.calls if call[0] == "post"] == [
+        "/identifiers/le/w3c/credentials/import",
+        "/identifiers/qvi/w3c/signing-requests/signing-id/signatures",
+    ]
+
+
+def test_edge_automator_reconciles_terminal_keria_states():
+    signing = signing_request_fixture(state="complete")
+    blocked = import_request_fixture(
+        state="blocked_native_vrd",
+        error="native VRD missing",
+    )
+    client = FakeClient(
+        responses={
+            ("get", "/identifiers/qvi/w3c/signing-requests"): {"requests": [signing]},
+            ("get", "/identifiers/le/w3c/signing-requests"): {"requests": []},
+            ("get", "/identifiers/qvi/w3c/credentials/import-requests"): {"requests": []},
+            ("get", "/identifiers/le/w3c/credentials/import-requests"): {"requests": [blocked]},
+        }
+    )
+
+    records = W3CEdgeAutomator(
+        client, store=MemoryW3CAutomationStore()
+    ).reconcile()
+
+    assert [record.status for record in records] == [W3C_DEDUPE_COMPLETE, W3C_DEDUPE_BLOCKED]
 
 
 def test_memory_dedupe_store_purges_old_terminal_records_only():
-    store = MemoryW3CDedupeStore()
+    store = MemoryW3CAutomationStore()
     store.put(
-        W3CDedupeRecord(
+        W3CAutomationRecord(
             id="old-complete",
-            aid="managed-aid",
-            kind=W3C_KIND_PROOF,
+            aid="Eqvi",
+            name="qvi",
+            action="signing",
+            purpose=W3C_PURPOSE_ISSUER_VC_JWT,
             status=W3C_DEDUPE_COMPLETE,
-            updated="2021-06-27T21:00:00+00:00",
+            updated="2026-06-01T00:00:00+00:00",
         )
     )
     store.put(
-        W3CDedupeRecord(
+        W3CAutomationRecord(
             id="recent-complete",
-            aid="managed-aid",
-            kind=W3C_KIND_PROOF,
+            aid="Eqvi",
+            name="qvi",
+            action="signing",
+            purpose=W3C_PURPOSE_ISSUER_VC_JWT,
             status=W3C_DEDUPE_COMPLETE,
-            updated="2021-06-27T21:09:30+00:00",
+            updated="2026-06-01T00:09:30+00:00",
         )
     )
     store.put(
-        W3CDedupeRecord(
+        W3CAutomationRecord(
             id="old-submitted",
-            aid="managed-aid",
-            kind=W3C_KIND_PROOF,
+            aid="Eqvi",
+            name="qvi",
+            action="signing",
+            purpose=W3C_PURPOSE_ISSUER_VC_JWT,
             status=W3C_DEDUPE_SUBMITTED,
-            updated="2021-06-27T21:00:00+00:00",
+            updated="2026-06-01T00:00:00+00:00",
         )
     )
     store.put(
-        W3CDedupeRecord(
+        W3CAutomationRecord(
             id="old-rejected",
-            aid="managed-aid",
-            kind=W3C_KIND_PROOF,
+            aid="Ele",
+            name="le",
+            action="import",
             status=W3C_DEDUPE_REJECTED,
-            updated="2021-06-27T21:00:00+00:00",
+            updated="2026-06-01T00:00:00+00:00",
         )
     )
 
     deleted = store.purgeTerminal(
         W3C_DEDUPE_TERMINAL_RETENTION_SECONDS,
-        now="2021-06-27T21:10:00+00:00",
+        now="2026-06-01T00:10:00+00:00",
     )
 
     assert deleted == 2
@@ -375,6 +424,32 @@ def test_memory_dedupe_store_purges_old_terminal_records_only():
     assert store.get("old-rejected") is None
     assert store.get("recent-complete").status == W3C_DEDUPE_COMPLETE
     assert store.get("old-submitted").status == W3C_DEDUPE_SUBMITTED
+
+
+def test_edge_automator_retries_stale_in_flight_records_after_active_window():
+    store = MemoryW3CAutomationStore()
+    store.put(
+        W3CAutomationRecord(
+            id="signing-id",
+            aid="Eqvi",
+            name="qvi",
+            action="signing",
+            purpose=W3C_PURPOSE_ISSUER_VC_JWT,
+            status=W3C_DEDUPE_IN_FLIGHT,
+            updated="2026-06-01T00:00:00+00:00",
+        )
+    )
+    client = FakeClient()
+
+    result = W3CEdgeAutomator(
+        client,
+        store=store,
+        now=lambda: "2026-06-01T00:10:00+00:00",
+        inFlightRetentionSeconds=W3C_DEDUPE_IN_FLIGHT_RETENTION_SECONDS,
+    ).handleSigningRequest(signing_request_fixture())
+
+    assert result["outcome"] == "submitted"
+    assert [call[0] for call in client.calls].count("post") == 1
 
 
 @pytest.mark.parametrize(

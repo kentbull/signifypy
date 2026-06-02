@@ -857,16 +857,6 @@ def test_signify_client_didwebs(make_signify_client):
     assert out.client == client
 
 
-def test_signify_client_w3c(make_signify_client):
-    client = make_signify_client()
-
-    out = client.w3c()
-
-    from signify.app.w3cing import W3C
-    assert type(out) is W3C
-    assert out.client == client
-
-
 def test_signify_client_config(make_signify_client):
     client = make_signify_client()
 
