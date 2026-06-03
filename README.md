@@ -54,6 +54,10 @@ These topic helpers depend on the generic `client.signals()` SSE channel for
 transient agent requests. Durable recovery remains topic-specific through the
 did:webs and W3C request endpoints.
 
+See `docs/w3c_holder_workflow.rst` for the SignifyTS-parity API surface,
+headless wallet role, automation stores, edge-signing policy, and live-service
+validation constraints.
+
 ### Packaging
 
 ```bash
