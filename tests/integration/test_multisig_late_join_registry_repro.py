@@ -10,9 +10,11 @@ CESR export, not through a registry CESR export API.
 from __future__ import annotations
 
 import pytest
+import requests
 from keri.core import coring, eventing
 from keri.core import signing as csigning
 from keri.help import helping
+from requests import HTTPError
 
 from .constants import ADDITIONAL_SCHEMA_OOBI_SAIDS, QVI_SCHEMA_SAID, TEST_WITNESS_AIDS
 from .helpers import (
@@ -27,6 +29,9 @@ from .helpers import (
     expose_multisig_agent_oobi,
     interact_multisig_group,
     issue_multisig_credential,
+    HEAVY_POLL_INTERVAL,
+    poll_until,
+    POLL_INTERVAL,
     query_key_state,
     resolve_oobi,
     resolve_schema_oobi,
@@ -105,22 +110,44 @@ def _assert_registry_visible(client, group_name: str, registry: dict) -> None:
     assert _registry_visible(registries, registry), registries
 
 
-def _xfail_if_late_member_cannot_see_registry(client, group_name: str, registry: dict) -> None:
+def _assert_registry_not_visible(client, group_name: str, registry: dict) -> None:
     registries = client.registries().list(group_name)
-    if not _registry_visible(registries, registry):
-        pytest.xfail(
-            "KERIA #316: late SignifyGroupHab join does not hydrate "
-            "preexisting multisig registry/TEL state"
-        )
-    assert _registry_visible(registries, registry), registries
+    assert not _registry_visible(registries, registry), registries
 
 
-def _assert_issued_credential_exportable(client, *, issuer_prefix: str, registry_said: str, said: str) -> None:
+def _assert_issued_credential_exportable(
+    client,
+    *,
+    issuer_prefix: str,
+    registry_said: str,
+    said: str,
+) -> None:
     issued = wait_for_issued_credential(client, issuer_prefix, said)
-    fetched = client.credentials().get(said)
-    fetched_cesr = client.credentials().get(said, includeCESR=True)
+    fetched = poll_until(
+        lambda: client.credentials().get(said),
+        ready=lambda credential: credential["sad"]["d"] == said,
+        timeout=120.0,
+        interval=HEAVY_POLL_INTERVAL,
+        describe=f"credential {said} direct read",
+        retry_exceptions=(HTTPError,),
+    )
+    fetched_cesr = poll_until(
+        lambda: client.credentials().get(said, includeCESR=True),
+        ready=bool,
+        timeout=120.0,
+        interval=HEAVY_POLL_INTERVAL,
+        describe=f"credential {said} CESR export",
+        retry_exceptions=(HTTPError,),
+    )
     exported = client.credentials().export(said)
-    state = client.credentials().state(registry_said, said)
+    state = poll_until(
+        lambda: client.credentials().state(registry_said, said),
+        ready=lambda credential_state: credential_state["et"] == "iss",
+        timeout=120.0,
+        interval=HEAVY_POLL_INTERVAL,
+        describe=f"credential {said} TEL state in registry {registry_said}",
+        retry_exceptions=(HTTPError,),
+    )
 
     assert issued["sad"]["d"] == said
     assert fetched["sad"]["d"] == said
@@ -246,6 +273,70 @@ def _create_registry_and_issue_credential(
         "sigs_a": sigs_a,
         "sigs_b": sigs_b,
     }
+
+
+def _import_credential_cesr_to_late_member(
+    *,
+    exporting_client,
+    late_client,
+    late_member_prefix: str,
+    credential_said: str,
+) -> None:
+    cesr = exporting_client.credentials().get(credential_said, includeCESR=True)
+    assert cesr
+
+    live_stack = late_client._integration_live_stack
+    response = requests.put(
+        f"{live_stack['keria_agent_url']}/",
+        data=cesr,
+        headers={
+            "CESR-DESTINATION": late_member_prefix,
+            "Content-Type": "application/octet-stream",
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    assert response.status_code == 204
+
+
+def _rename_imported_registry(client, group_name: str, registry: dict) -> dict:
+    def fetch_or_rename():
+        try:
+            return client.registries().get(group_name, registry["name"])
+        except HTTPError:
+            return client.registries().rename(
+                group_name,
+                registry["regk"],
+                registry["name"],
+            )
+
+    return poll_until(
+        fetch_or_rename,
+        ready=lambda renamed: renamed["regk"] == registry["regk"] and renamed["name"] == registry["name"],
+        timeout=120.0,
+        interval=POLL_INTERVAL,
+        describe=f"imported registry {registry['regk']} renamed to {registry['name']} for {group_name}",
+        retry_exceptions=(HTTPError,),
+    )
+
+
+def _apply_arsh_registry_import_workaround(
+    *,
+    exporting_client,
+    late_client,
+    late_member_prefix: str,
+    group_name: str,
+    registry: dict,
+    credential_said: str,
+) -> None:
+    _import_credential_cesr_to_late_member(
+        exporting_client=exporting_client,
+        late_client=late_client,
+        late_member_prefix=late_member_prefix,
+        credential_said=credential_said,
+    )
+    _rename_imported_registry(late_client, group_name, registry)
+    _assert_registry_visible(late_client, group_name, registry)
 
 
 def _submit_multisig_admit_from_local_state(
@@ -414,6 +505,7 @@ def test_late_joined_member_cannot_see_existing_multisig_registry_with_issued_cr
     exchange_agent_oobis(issuer_client_b, member_b_name, holder_client, holder_name)
     _resolve_schema_set(issuer_client_a, QVI_SCHEMA_SAID)
     _resolve_schema_set(issuer_client_b, QVI_SCHEMA_SAID)
+    _resolve_schema_set(late_client_c, QVI_SCHEMA_SAID)
 
     group_a, group_b = create_multisig_group(
         issuer_client_a,
@@ -463,7 +555,15 @@ def test_late_joined_member_cannot_see_existing_multisig_registry_with_issued_cr
     )
     _assert_registry_visible(issuer_client_a, group_name, issued["registry_a"])
     _assert_registry_visible(issuer_client_b, group_name, issued["registry_b"])
-    _xfail_if_late_member_cannot_see_registry(late_client_c, group_name, issued["registry_a"])
+    _assert_registry_not_visible(late_client_c, group_name, issued["registry_a"])
+    _apply_arsh_registry_import_workaround(
+        exporting_client=issuer_client_a,
+        late_client=late_client_c,
+        late_member_prefix=late_member["prefix"],
+        group_name=group_name,
+        registry=issued["registry_a"],
+        credential_said=issued["creder_a"].said,
+    )
 
 
 def test_late_joined_qvi_member_cannot_see_delegated_qvi_registry_with_issued_credential(client_factory):
@@ -500,6 +600,7 @@ def test_late_joined_qvi_member_cannot_see_delegated_qvi_registry_with_issued_cr
     _resolve_schema_set(geda_client_b, QVI_SCHEMA_SAID)
     _resolve_schema_set(qvi_client_a, QVI_SCHEMA_SAID, LE_SCHEMA_SAID)
     _resolve_schema_set(qvi_client_b, QVI_SCHEMA_SAID, LE_SCHEMA_SAID)
+    _resolve_schema_set(qvi_late_client_c, QVI_SCHEMA_SAID, LE_SCHEMA_SAID)
 
     geda_group_a, geda_group_b = create_multisig_group(
         geda_client_a,
@@ -647,4 +748,12 @@ def test_late_joined_qvi_member_cannot_see_delegated_qvi_registry_with_issued_cr
     )
     _assert_registry_visible(qvi_client_a, qvi_group_name, qvi_issued_le["registry_a"])
     _assert_registry_visible(qvi_client_b, qvi_group_name, qvi_issued_le["registry_b"])
-    _xfail_if_late_member_cannot_see_registry(qvi_late_client_c, qvi_group_name, qvi_issued_le["registry_a"])
+    _assert_registry_not_visible(qvi_late_client_c, qvi_group_name, qvi_issued_le["registry_a"])
+    _apply_arsh_registry_import_workaround(
+        exporting_client=qvi_client_a,
+        late_client=qvi_late_client_c,
+        late_member_prefix=qvi_late_member["prefix"],
+        group_name=qvi_group_name,
+        registry=qvi_issued_le["registry_a"],
+        credential_said=qvi_issued_le["creder_a"].said,
+    )
