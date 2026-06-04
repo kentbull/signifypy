@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 import requests
-from keri.core import coring, eventing
+from keri.core import coring, eventing, parsing
 from keri.core import signing as csigning
 from keri.help import helping
 from requests import HTTPError
@@ -105,6 +105,117 @@ def _registry_visible(registries: list[dict], registry: dict) -> bool:
     )
 
 
+class _CesrKelRecorder:
+    def __init__(self):
+        self.events = []
+
+    def processEvent(self, serder, **_):
+        self.events.append(serder)
+
+    def processAttachedReceiptCouples(self, *_, **__):
+        return None
+
+    def processAttachedReceiptQuadruples(self, *_, **__):
+        return None
+
+    def processReceipt(self, *_, **__):
+        return None
+
+    def processReceiptWitness(self, *_, **__):
+        return None
+
+    def processReceiptTrans(self, *_, **__):
+        return None
+
+    def processQuery(self, *_, **__):
+        return None
+
+
+class _CesrTelRecorder:
+    def __init__(self):
+        self.events = []
+
+    def processEvent(self, serder, **_):
+        self.events.append(serder)
+
+    def processQuery(self, *_, **__):
+        return None
+
+
+class _CesrCredentialRecorder:
+    def __init__(self):
+        self.credentials = []
+
+    def processCredential(self, creder, **_):
+        self.credentials.append(creder)
+
+
+class _CesrExchangeRecorder:
+    def processEvent(self, *_, **__):
+        return None
+
+
+class _CesrReplyRecorder:
+    def processReply(self, *_, **__):
+        return None
+
+
+def _parse_cesr_export(cesr: bytes) -> tuple[list, list, list]:
+    kel = _CesrKelRecorder()
+    tel = _CesrTelRecorder()
+    acdc = _CesrCredentialRecorder()
+    parser = parsing.Parser(framed=True)
+    parser.parse(
+        ims=bytearray(cesr),
+        kvy=kel,
+        tvy=tel,
+        exc=_CesrExchangeRecorder(),
+        rvy=_CesrReplyRecorder(),
+        vry=acdc,
+        local=False,
+    )
+    return kel.events, tel.events, acdc.credentials
+
+
+def _assert_cesr_export_contains_registry_and_credential(
+    cesr: bytes,
+    *,
+    registry_said: str,
+    credential_said: str,
+) -> None:
+    _, tel_events, credentials = _parse_cesr_export(cesr)
+    registry_events = [
+        event
+        for event in tel_events
+        if event.ilk == coring.Ilks.vcp and event.pre == registry_said
+    ]
+    issue_events = [
+        event
+        for event in tel_events
+        if (
+            event.ilk == coring.Ilks.iss
+            and event.pre == credential_said
+            and event.ked.get("ri") == registry_said
+        )
+    ]
+    exported_credentials = [
+        credential for credential in credentials if credential.said == credential_said
+    ]
+
+    assert registry_events, [
+        {"ilk": event.ilk, "pre": event.pre, "ked": event.ked}
+        for event in tel_events
+    ]
+    assert issue_events, [
+        {"ilk": event.ilk, "pre": event.pre, "ked": event.ked}
+        for event in tel_events
+    ]
+    assert exported_credentials, [
+        {"said": credential.said, "registry": credential.regi}
+        for credential in credentials
+    ]
+
+
 def _assert_registry_visible(client, group_name: str, registry: dict) -> None:
     registries = client.registries().list(group_name)
     assert _registry_visible(registries, registry), registries
@@ -154,6 +265,11 @@ def _assert_issued_credential_exportable(
     assert fetched_cesr
     assert exported == fetched_cesr
     assert state["et"] == "iss"
+    _assert_cesr_export_contains_registry_and_credential(
+        fetched_cesr,
+        registry_said=registry_said,
+        credential_said=said,
+    )
 
 
 def _create_registry_and_issue_credential(
@@ -275,15 +391,186 @@ def _create_registry_and_issue_credential(
     }
 
 
+def _wait_for_credential_state_convergence(
+    clients: list,
+    *,
+    registry_said: str,
+    credential_said: str,
+    expected_et: str,
+) -> tuple[dict, ...]:
+    def normalized_state(state: dict) -> dict:
+        normalized = dict(state)
+        normalized.pop("dt", None)
+        return normalized
+
+    return poll_until(
+        lambda: tuple(
+            client.credentials().state(registry_said, credential_said)
+            for client in clients
+        ),
+        ready=lambda states: (
+            all(state.get("et") == expected_et for state in states)
+            and all(
+                normalized_state(state) == normalized_state(states[0])
+                for state in states
+            )
+        ),
+        timeout=120.0,
+        interval=POLL_INTERVAL,
+        describe=(
+            "multisig credential state convergence "
+            f"(registry_said={registry_said}, credential_said={credential_said}, expected_et={expected_et!r})"
+        ),
+        retry_exceptions=(HTTPError,),
+    )
+
+
+def _wait_for_multisig_issuance_request(client, credential_said: str) -> tuple[dict, list[dict]]:
+    def fetch_matching_request():
+        notes = [
+            note
+            for note in client.notifications().list().get("notes", [])
+            if not note.get("r") and note.get("a", {}).get("r") == "/multisig/iss"
+        ]
+        for note in reversed(notes):
+            try:
+                request = client.groups().get_request(note["a"]["d"])
+            except HTTPError:
+                continue
+
+            if not request or request[0]["exn"]["r"] != "/multisig/iss":
+                continue
+
+            acdc = request[0]["exn"].get("e", {}).get("acdc", {})
+            if acdc.get("d") == credential_said:
+                return note, request
+
+        return None
+
+    note, request = poll_until(
+        fetch_matching_request,
+        ready=lambda value: value is not None,
+        timeout=120.0,
+        interval=POLL_INTERVAL,
+        describe=f"multisig issuance request for credential {credential_said}",
+        retry_exceptions=(HTTPError,),
+    )
+    client.notifications().mark(note["i"])
+    return note, request
+
+
+def _issue_post_join_credential_with_all_members(
+    client_a,
+    member_a_name: str,
+    client_b,
+    member_b_name: str,
+    client_c,
+    member_c_name: str,
+    group_name: str,
+    registry: dict,
+    *,
+    recipient: str,
+    data: dict,
+    schema: str = QVI_SCHEMA_SAID,
+    edges: dict | None = None,
+    rules: dict | None = None,
+) -> dict:
+    member_a = client_a.identifiers().get(member_a_name)
+    member_b = client_b.identifiers().get(member_b_name)
+    member_c = client_c.identifiers().get(member_c_name)
+    group_a = client_a.identifiers().get(group_name)
+    group_b = client_b.identifiers().get(group_name)
+    group_c = client_c.identifiers().get(group_name)
+    assert group_a["prefix"] == group_b["prefix"] == group_c["prefix"]
+
+    timestamp = helping.nowIso8601()
+    creder_a, _, _, _, issue_operation_a, _ = issue_multisig_credential(
+        client_a,
+        local_member_name=member_a_name,
+        group_name=group_name,
+        other_member_prefixes=[member_b["prefix"], member_c["prefix"]],
+        registry_name=registry["name"],
+        recipient=recipient,
+        data=data,
+        schema=schema,
+        edges=edges,
+        rules=rules,
+        timestamp=timestamp,
+        is_initiator=True,
+    )
+    _, issue_request_b = _wait_for_multisig_issuance_request(client_b, creder_a.said)
+    _, issue_request_c = _wait_for_multisig_issuance_request(client_c, creder_a.said)
+
+    creder_b, _, _, _, issue_operation_b, _ = issue_multisig_credential(
+        client_b,
+        local_member_name=member_b_name,
+        group_name=group_name,
+        other_member_prefixes=[member_a["prefix"], member_c["prefix"]],
+        registry_name=registry["name"],
+        recipient=recipient,
+        data=data,
+        schema=schema,
+        edges=edges,
+        rules=rules,
+        timestamp=timestamp,
+        request=issue_request_b,
+    )
+    creder_c, _, _, _, issue_operation_c, _ = issue_multisig_credential(
+        client_c,
+        local_member_name=member_c_name,
+        group_name=group_name,
+        other_member_prefixes=[member_a["prefix"], member_b["prefix"]],
+        registry_name=registry["name"],
+        recipient=recipient,
+        data=data,
+        schema=schema,
+        edges=edges,
+        rules=rules,
+        timestamp=timestamp,
+        request=issue_request_c,
+    )
+
+    assert creder_a.said == creder_b.said == creder_c.said
+    wait_for_operation(client_a, issue_operation_a)
+    wait_for_operation(client_b, issue_operation_b)
+    wait_for_operation(client_c, issue_operation_c)
+    _wait_for_credential_state_convergence(
+        [client_a, client_b, client_c],
+        registry_said=registry["regk"],
+        credential_said=creder_a.said,
+        expected_et="iss",
+    )
+    for client in (client_a, client_b, client_c):
+        _assert_registry_visible(client, group_name, registry)
+        _assert_issued_credential_exportable(
+            client,
+            issuer_prefix=group_a["prefix"],
+            registry_said=registry["regk"],
+            said=creder_a.said,
+        )
+
+    return {
+        "creder_a": creder_a,
+        "creder_b": creder_b,
+        "creder_c": creder_c,
+    }
+
+
 def _import_credential_cesr_to_late_member(
     *,
     exporting_client,
     late_client,
     late_member_prefix: str,
+    registry_said: str,
     credential_said: str,
 ) -> None:
     cesr = exporting_client.credentials().get(credential_said, includeCESR=True)
     assert cesr
+    _assert_cesr_export_contains_registry_and_credential(
+        cesr,
+        registry_said=registry_said,
+        credential_said=credential_said,
+    )
 
     live_stack = late_client._integration_live_stack
     response = requests.put(
@@ -297,6 +584,33 @@ def _import_credential_cesr_to_late_member(
     )
     response.raise_for_status()
     assert response.status_code == 204
+
+
+def _assert_credential_visible(client, credential_said: str) -> None:
+    poll_until(
+        lambda: client.credentials().get(credential_said),
+        ready=lambda credential: credential["sad"]["d"] == credential_said,
+        timeout=45.0,
+        interval=HEAVY_POLL_INTERVAL,
+        describe=f"imported credential {credential_said} direct read",
+        retry_exceptions=(HTTPError,),
+    )
+
+
+def _assert_credential_state_visible(
+    client,
+    *,
+    registry_said: str,
+    credential_said: str,
+) -> None:
+    poll_until(
+        lambda: client.credentials().state(registry_said, credential_said),
+        ready=lambda state: state["et"] == "iss",
+        timeout=120.0,
+        interval=HEAVY_POLL_INTERVAL,
+        describe=f"imported credential {credential_said} TEL state in registry {registry_said}",
+        retry_exceptions=(HTTPError,),
+    )
 
 
 def _rename_imported_registry(client, group_name: str, registry: dict) -> dict:
@@ -333,10 +647,17 @@ def _apply_arsh_registry_import_workaround(
         exporting_client=exporting_client,
         late_client=late_client,
         late_member_prefix=late_member_prefix,
+        registry_said=registry["regk"],
         credential_said=credential_said,
     )
     _rename_imported_registry(late_client, group_name, registry)
     _assert_registry_visible(late_client, group_name, registry)
+    _assert_credential_state_visible(
+        late_client,
+        registry_said=registry["regk"],
+        credential_said=credential_said,
+    )
+    _assert_credential_visible(late_client, credential_said)
 
 
 def _submit_multisig_admit_from_local_state(
@@ -564,6 +885,19 @@ def test_late_joined_member_cannot_see_existing_multisig_registry_with_issued_cr
         registry=issued["registry_a"],
         credential_said=issued["creder_a"].said,
     )
+    post_join_issued = _issue_post_join_credential_with_all_members(
+        issuer_client_a,
+        member_a_name,
+        issuer_client_b,
+        member_b_name,
+        late_client_c,
+        late_member_name,
+        group_name,
+        issued["registry_a"],
+        recipient=holder["prefix"],
+        data={"LEI": "54930084UKLVMY22DS16"},
+    )
+    assert post_join_issued["creder_a"].said != issued["creder_a"].said
 
 
 def test_late_joined_qvi_member_cannot_see_delegated_qvi_registry_with_issued_credential(client_factory):
@@ -757,3 +1091,19 @@ def test_late_joined_qvi_member_cannot_see_delegated_qvi_registry_with_issued_cr
         registry=qvi_issued_le["registry_a"],
         credential_said=qvi_issued_le["creder_a"].said,
     )
+    post_join_qvi_issued_le = _issue_post_join_credential_with_all_members(
+        qvi_client_a,
+        qvi_member_a_name,
+        qvi_client_b,
+        qvi_member_b_name,
+        qvi_late_client_c,
+        qvi_late_member_name,
+        qvi_group_name,
+        qvi_issued_le["registry_a"],
+        recipient=le_holder["prefix"],
+        data={"LEI": "875500T18L8QJY2K8O09"},
+        schema=LE_SCHEMA_SAID,
+        edges=_source_edges("qvi", qvi_received_qvi_a),
+        rules=_le_rules(),
+    )
+    assert post_join_qvi_issued_le["creder_a"].said != qvi_issued_le["creder_a"].said
