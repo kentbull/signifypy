@@ -32,9 +32,8 @@ To inspect the current live-scenario coverage:
   coverage. It builds a real GEDA -> QVI -> LE -> VRD chain against a running
   KERIA instance, writes the manifest consumed by live holder-presentation
   acceptance work, and prints the LE holder wallet passcode for manual
-  `signify-react-ts` login. KERIA may stage exact W3C signing inputs from that
-  manifest, but every credential and presentation signature remains an edge
-  wallet signature.
+  `signify-react-ts` login. W3C artifact assembly is intentionally outside
+  SignifyPy and is driven by crosswalk edge helpers such as `signifypy-w3c`.
 
 Verdict: do not add new integration workflows back under `scripts/`. New live
 coverage belongs under `tests/integration`.

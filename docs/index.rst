@@ -12,7 +12,6 @@ Welcome to Signifypy's documentation!
 
    README
    maintainer_features
-   w3c_holder_workflow
    releasing
    changelog
 
