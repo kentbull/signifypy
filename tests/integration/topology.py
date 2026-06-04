@@ -84,8 +84,8 @@ class IntegrationStackTopology:
     @property
     def witness_oobis(self) -> list[str]:
         return [
-            f"http://{self.host}:{port}/oobi/{aid}/controller?name={name}&tag=witness"
-            for port, aid, name in zip(self.witness_ports, WITNESS_AIDS, ("Wan", "Wil", "Wes"))
+            f"http://{self.host}:{port}/oobi/{aid}"
+            for port, aid in zip(self.witness_ports, WITNESS_AIDS)
         ]
 
     @property
