@@ -40,14 +40,16 @@ make test
 
 ### did:webs Helpers
 
-This branch adds client helpers for KERIA did:webs publication:
+This branch adds thin client helpers for KERIA did:webs setup and readiness:
 
-- `client.didwebs()` polls and approves did:webs signing requests.
+- `client.didwebs().setup(name)` reads KERIA setup state and edge-call args.
+- `client.didwebs().readiness(name)` reads compact did:webs readiness.
 
 W3C VC-JWT and VP-JWT artifact workflows live outside SignifyPy. Use the
-`signifypy-w3c` package from `w3c-crosswalk` for Python edge-wallet W3C
-issuance and presentation helpers. SignifyPy stays focused on core
-Signify/KERI/ACDC client behavior.
+`signifypy-did-webs` package from `w3c-crosswalk` for Python edge-wallet
+did:webs setup orchestration and `signifypy-w3c` for W3C issuance and
+presentation helpers. SignifyPy stays focused on core Signify/KERI/ACDC client
+behavior.
 
 ### Packaging
 
