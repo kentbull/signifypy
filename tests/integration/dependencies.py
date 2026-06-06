@@ -18,7 +18,7 @@ class IntegrationDependency:
 KERIPY = IntegrationDependency(
     name="KERIpy",
     repo="https://github.com/WebOfTrust/keripy.git",
-    ref="4ee02c0213770d25a0114fe7ebd7ab4ab5500cde",
+    ref="cbbf700fa8091587b96b5475c5f50d1d8bf3ca40",
     path_name="keripy",
     env_root="SIGNIFYPY_INTEGRATION_KERIPY_ROOT",
     env_ref="SIGNIFYPY_INTEGRATION_KERIPY_REF",
@@ -26,8 +26,8 @@ KERIPY = IntegrationDependency(
 
 KERIA = IntegrationDependency(
     name="KERIA",
-    repo="https://github.com/WebOfTrust/keria.git",
-    ref="9e2461550f373ad7bdbe7eebeaceac689cb15397",
+    repo="https://github.com/kentbull/keria.git",
+    ref="d38b603f7ecc7653956143d3719c94bac0f7c45c",
     path_name="keria",
     env_root="SIGNIFYPY_INTEGRATION_KERIA_ROOT",
     env_ref="SIGNIFYPY_INTEGRATION_KERIA_REF",

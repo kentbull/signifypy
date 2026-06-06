@@ -55,8 +55,8 @@ For local runs, `make sync-integration-deps` installs them under
 The current stack pins those source dependencies to explicit compatibility
 SHAs:
 
-- `keripy`: `4ee02c0213770d25a0114fe7ebd7ab4ab5500cde` (tag `1.2.12`)
-- `keria`: `9e2461550f373ad7bdbe7eebeaceac689cb15397`
+- `keripy`: `cbbf700fa8091587b96b5475c5f50d1d8bf3ca40` (tag `1.2.13`)
+- `keria`: `d38b603f7ecc7653956143d3719c94bac0f7c45c` from `kentbull/keria`
 - `vLEI`: `f514b9431c5f965b5f7f64a8693e19df2f181564` (tag `1.0.2`)
 
 The CI runtime also constrains `hio` to `0.6.14` across the live stack.

@@ -46,7 +46,7 @@ def install_harness_patches() -> None:
     indirecting.createHttpServer = create_loopback_http_server
 
     class NoopQueryEnd:
-        def __init__(self, hab):
+        def __init__(self, hab, **_kwa):
             self.hab = hab
 
         def on_get(self, req, rep):
@@ -54,7 +54,7 @@ def install_harness_patches() -> None:
                 description="witness query endpoint disabled for this SignifyPy harness"
             )
 
-    # KERIpy 1.2.12 opens the same LMDB-backed Reger twice when setupWitness
+    # KERIpy 1.2.x opens the same LMDB-backed Reger twice when setupWitness
     # constructs QueryEnd in-process on Linux. Phase 1 does not use the witness
     # /query endpoint, so replace it with a minimal no-op endpoint instead of
     # taking on a deeper local fork of the witness bootstrap logic.
