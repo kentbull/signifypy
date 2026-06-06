@@ -25,9 +25,9 @@ def test_make_stack_topology_builds_urls_and_oobis(tmp_path):
     assert topology.vlei_schema_url == "http://127.0.0.1:7723"
     assert topology.schema_oobi == f"http://127.0.0.1:7723/oobi/{QVI_SCHEMA_SAID}"
     assert topology.witness_oobis == [
-        f"http://127.0.0.1:5601/oobi/{WITNESS_AIDS[0]}/controller?name=Wan&tag=witness",
-        f"http://127.0.0.1:5602/oobi/{WITNESS_AIDS[1]}/controller?name=Wil&tag=witness",
-        f"http://127.0.0.1:5603/oobi/{WITNESS_AIDS[2]}/controller?name=Wes&tag=witness",
+        f"http://127.0.0.1:5601/oobi/{WITNESS_AIDS[0]}",
+        f"http://127.0.0.1:5602/oobi/{WITNESS_AIDS[1]}",
+        f"http://127.0.0.1:5603/oobi/{WITNESS_AIDS[2]}",
     ]
     assert topology.as_live_stack()["witness_config_iurls"] == topology.witness_oobis
 

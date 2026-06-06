@@ -28,6 +28,12 @@ To inspect the current live-scenario coverage:
   material for integration scenarios.
 - `keri/` keeps legacy config assets that may still be useful for reference
   during future harness cleanup.
+- `setup_vrd_holder_presentation_chain.py` is an operator setup tool, not test
+  coverage. It builds a real GEDA -> QVI -> LE -> VRD chain against a running
+  KERIA instance, writes the manifest consumed by live holder-presentation
+  acceptance work, and prints the LE holder wallet passcode for manual
+  `signify-react-ts` login. W3C artifact assembly is intentionally outside
+  SignifyPy and is driven by crosswalk edge helpers such as `signifypy-w3c`.
 
 Verdict: do not add new integration workflows back under `scripts/`. New live
 coverage belongs under `tests/integration`.
