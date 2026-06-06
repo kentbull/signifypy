@@ -54,6 +54,18 @@ signify.app.delegating
 .. automodule:: signify.app.delegating
    :members:
 
+signify.app.didwebing
+---------------------
+
+``signify.app.didwebing`` exposes only the thin KERIA did:webs setup and
+readiness reads. Registry creation, designated-alias issuance, and other
+did:webs setup orchestration live in the ``signifypy-did-webs`` package from
+``w3c-crosswalk``. Live KERIA notification transport is exposed separately
+through ``client.signals()``.
+
+.. automodule:: signify.app.didwebing
+   :members:
+
 signify.app.exchanging
 ----------------------
 

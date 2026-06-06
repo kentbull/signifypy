@@ -42,6 +42,11 @@ class Identifiers:
         habState = self.client.get(f"/identifiers/{name}")
         return habState.json()
 
+    def dws(self, name):
+        """Return KERIA-published did:webs material for one managed identifier."""
+        res = self.client.get(f"/identifiers/{name}/dws")
+        return res.json()
+
     def rename(self, name, newName):
         """Rename an identifier alias without changing its underlying AID."""
         return self.update(name, {"name": newName})
