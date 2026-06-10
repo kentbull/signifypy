@@ -424,6 +424,11 @@ class SignifyClient:
         from signify.app.signaling import AgentSignals
         return AgentSignals(client=self)
 
+    def didwebs(self):
+        """Return the did:webs setup and readiness resource wrapper."""
+        from signify.app.didwebing import DidWebs
+        return DidWebs(client=self)
+
     def config(self):
         """Return the agent-configuration read resource wrapper."""
         from signify.app.coring import Config

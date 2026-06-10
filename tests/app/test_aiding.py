@@ -59,6 +59,56 @@ def test_aiding_get():
     unstub()
 
 
+def test_aiding_dws_returns_ready_didwebs_material():
+    from signify.app.clienting import SignifyClient
+    client = SignifyClient(passcode='abcdefghijklmnop01234')
+
+    from signify.app.aiding import Identifiers
+    ids = Identifiers(client=client)
+
+    from requests import Response
+    mock_response = mock(spec=Response, strict=True)
+    payload = {
+        "dws": "did:webs:example:dws:aid1",
+        "didJsonUrl": "https://example/dws/aid1/did.json",
+        "keriCesrUrl": "https://example/dws/aid1/keri.cesr",
+    }
+
+    expect(client, times=1).get('/identifiers/aid1/dws').thenReturn(mock_response)
+    expect(mock_response, times=1).json().thenReturn(payload)
+
+    assert ids.dws(name='aid1') == payload
+
+    verifyNoUnwantedInteractions()
+    unstub()
+
+
+def test_aiding_dws_returns_pending_didwebs_material():
+    from signify.app.clienting import SignifyClient
+    client = SignifyClient(passcode='abcdefghijklmnop01234')
+
+    from signify.app.aiding import Identifiers
+    ids = Identifiers(client=client)
+
+    from requests import Response
+    mock_response = mock(spec=Response, strict=True)
+    payload = {
+        "dws": None,
+        "didJsonUrl": None,
+        "keriCesrUrl": None,
+    }
+
+    expect(client, times=1).get('/identifiers/aid:name with ñ!/dws').thenReturn(
+        mock_response
+    )
+    expect(mock_response, times=1).json().thenReturn(payload)
+
+    assert ids.dws(name='aid:name with ñ!') == payload
+
+    verifyNoUnwantedInteractions()
+    unstub()
+
+
 def test_aiding_create():
     from signify.core import keeping
     mock_keeper = mock({'params': lambda: {'keeper': 'params'}}, spec=keeping.SaltyKeeper, strict=True)
