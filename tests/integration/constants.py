@@ -6,12 +6,14 @@ that do not change when the harness runs in parallel.
 """
 
 QVI_SCHEMA_SAID = "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao"
+UNTARGETED_ATTESTATION_SCHEMA_SAID = "EAv8omZ-o3Pk45h72_WnIpt6LTWNzc8hmLjeblpxB9vz"
 ADDITIONAL_SCHEMA_OOBI_SAIDS = {
     "legal-entity": "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
     "ecr-auth": "EH6ekLjSr8V32WyFbGe1zXjTzFs9PkTYmupJ9H65O14g",
     "ecr": "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw",
     "oor-auth": "EKA57bKBKxr_kN7iN5i7lMUxpMG-s19dRcmov1iDxz-E",
     "oor": "EBNaNu-M9P5cgrnfl2Fvymy4E_jvxxyjb70PRtiANlJy",
+    "untargeted-attestation": UNTARGETED_ATTESTATION_SCHEMA_SAID,
 }
 
 WITNESS_AIDS = [

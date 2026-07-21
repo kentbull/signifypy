@@ -75,7 +75,7 @@ consumed fragment files.
 Create a fragment for PR or issue `100` using the configured SignifyPy types:
 
 ```bash
-cd /Users/kbull/code/keri/kentbull/signifypy
+cd signifypy
 ./venv/bin/python -m towncrier create --dir newsfragments \
   --content "Documented the repository-secret PyPI publish flow." \
   100.doc.md
@@ -84,7 +84,7 @@ cd /Users/kbull/code/keri/kentbull/signifypy
 Another example for a bug fix:
 
 ```bash
-cd /Users/kbull/code/keri/kentbull/signifypy
+cd signifypy
 ./venv/bin/python -m towncrier create --dir newsfragments \
   --content "Fixed release workflow auth to use the repository secret PYPI_API_TOKEN." \
   101.fixed.md
@@ -93,7 +93,7 @@ cd /Users/kbull/code/keri/kentbull/signifypy
 You can also create the fragment file yourself if that is faster:
 
 ```bash
-cd /Users/kbull/code/keri/kentbull/signifypy
+cd signifypy
 cat > newsfragments/102.misc.md <<'EOF'
 Clarified the maintainer release runbook with concrete Towncrier examples.
 EOF
@@ -102,14 +102,14 @@ EOF
 Preview the unreleased changelog without modifying tracked files:
 
 ```bash
-cd /Users/kbull/code/keri/kentbull/signifypy
+cd signifypy
 ./venv/bin/python -m towncrier build --draft --version 0.4.1
 ```
 
 Build the actual `0.4.1` changelog entry during release preparation:
 
 ```bash
-cd /Users/kbull/code/keri/kentbull/signifypy
+cd signifypy
 ./venv/bin/python -m towncrier build --yes --version 0.4.1
 ```
 
@@ -117,7 +117,7 @@ Or let the maintained release-prep target do the version bump, lock refresh,
 Towncrier build, and release commit together:
 
 ```bash
-cd /Users/kbull/code/keri/kentbull/signifypy
+cd signifypy
 make release-patch
 ```
 
