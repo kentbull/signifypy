@@ -30,6 +30,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import os
+import shutil
 import socket
 import subprocess
 from pathlib import Path
@@ -66,6 +67,7 @@ def _dependency_root(dependency):
 KERIPY_ROOT = _dependency_root(KERIPY)
 KERIA_ROOT = _dependency_root(KERIA)
 VLEI_ROOT = _dependency_root(VLEI)
+UNTARGETED_SCHEMA_PATH = SIGNIFYPY_ROOT / "tests" / "schema" / "optional-issuee-attestation.json"
 SIGNIFYPY_PYTHON = Path(os.getenv("SIGNIFYPY_INTEGRATION_SIGNIFYPY_PYTHON", SIGNIFYPY_ROOT / "venv" / "bin" / "python")).expanduser()
 KERIA_PYTHON = Path(os.getenv("SIGNIFYPY_INTEGRATION_KERIA_PYTHON", KERIA_ROOT / "venv" / "bin" / "python")).expanduser()
 VLEI_PYTHON = Path(os.getenv("SIGNIFYPY_INTEGRATION_VLEI_PYTHON", VLEI_ROOT / "venv" / "bin" / "python")).expanduser()
@@ -383,6 +385,7 @@ def _launch_live_stack(live_stack: dict):
     vlei_python = _require_python(VLEI_PYTHON, "vLEI")
     runtime_root = live_stack["runtime_root"]
     config_root = live_stack["config_root"]
+    schema_dir = _prepare_schema_directory(runtime_root)
 
     _write_canonical_witness_configs(config_root, live_stack)
     _write_keria_config(config_root, live_stack)
@@ -465,7 +468,7 @@ def _launch_live_stack(live_stack: dict):
                 "-u",
                 str(VLEI_SERVER_SCRIPT),
                 "--schema-dir",
-                str(VLEI_ROOT / "schema" / "acdc"),
+                str(schema_dir),
                 "--cred-dir",
                 str(VLEI_ROOT / "samples" / "acdc"),
                 "--oobi-dir",
@@ -581,3 +584,10 @@ def isolated_client_factory(isolated_live_stack):
     boundaries. Most business-workflow tests should stay on `client_factory`.
     """
     return _client_factory(isolated_live_stack)
+def _prepare_schema_directory(runtime_root: Path) -> Path:
+    """Overlay integration-owned schemas on the pinned vLEI schema set."""
+    schema_dir = runtime_root / "schemas"
+    shutil.copytree(VLEI_ROOT / "schema" / "acdc", schema_dir)
+    shutil.copy2(UNTARGETED_SCHEMA_PATH, schema_dir / UNTARGETED_SCHEMA_PATH.name)
+    return schema_dir
+
