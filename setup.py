@@ -81,6 +81,7 @@ setup(
     python_requires='>=3.12.3',
     install_requires=[
         'gleif_keri==1.2.16',
+        'gleif_hio==0.6.21',
         'multicommand==1.0.0',
         'requests==2.32.3',
         'http_sfv==0.9.9',
