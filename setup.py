@@ -80,7 +80,7 @@ setup(
     ],
     python_requires='>=3.12.3',
     install_requires=[
-        'keri==1.2.12',
+        'gleif_keri==1.2.16',
         'multicommand==1.0.0',
         'requests==2.32.3',
         'http_sfv==0.9.9',
