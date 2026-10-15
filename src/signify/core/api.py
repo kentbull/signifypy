@@ -16,8 +16,8 @@ class Operation:
     name: str  # unique name for this operation
     metadata: dict  # metadata about the operation
     done: bool  # True if operation is complete
-    error: bool | None  # True if operation failed, False if succeeded, None if not completed
-    response: dict | None  # response data from operation, if any
+    error: bool | None = None  # True if operation failed, False if succeeded, None if not completed
+    response: dict | None = None  # response data from operation, if any
 
 @dataclass
 class ReplyMessage:
