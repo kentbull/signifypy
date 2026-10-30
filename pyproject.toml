@@ -33,8 +33,8 @@ keywords = [
 ]
 requires-python = ">=3.12.3"
 dependencies = [
-    "gleif_keri==1.2.17",
-    "gleif_hio==0.6.21",
+    "gleif_keri==1.2.18",
+    "gleif_hio==0.6.22",
     "multicommand==1.0.0",
     "requests>=2.32.3,<3",
     "http_sfv==0.9.9",
