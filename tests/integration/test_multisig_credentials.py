@@ -9,7 +9,8 @@ instead of the stored exchanges and credentials they point to.
 from __future__ import annotations
 
 import pytest
-from keri.core import coring
+from keri.core import coring, eventing
+from keri.core import signing as csigning
 from keri.help import helping
 
 from .constants import ADDITIONAL_SCHEMA_OOBI_SAIDS, QVI_SCHEMA_SAID, TEST_WITNESS_AIDS
@@ -31,6 +32,7 @@ from .helpers import (
     submit_admit,
     submit_multisig_admit,
     wait_for_credential,
+    wait_for_exchange_message,
     wait_for_exchange,
     wait_for_filtered_credential,
     wait_for_issued_credential,
@@ -273,6 +275,101 @@ def _assert_filtered_contains(client, *, schema_said: str, subject_prefix: str, 
     """Assert one issuer-side filtered list contains the expected credential SAID."""
     filtered = client.credentials().list(filter={"-s": schema_said, "-a-i": subject_prefix})
     assert any(credential["sad"]["d"] == said for credential in filtered)
+
+
+def test_multisig_ipex_apply_join_replays_embedded_proposal(client_factory):
+    """A non-initiating group member can approve a peer-originated IPEX apply."""
+    sender_client_a = client_factory()
+    sender_client_b = client_factory()
+    recipient_client = client_factory()
+
+    member_a_name = alias("sender-a")
+    member_b_name = alias("sender-b")
+    group_name = alias("sender-group")
+    recipient_name = alias("recipient")
+
+    member_a = create_identifier(sender_client_a, member_a_name, wits=TEST_WITNESS_AIDS)
+    member_b = create_identifier(sender_client_b, member_b_name, wits=TEST_WITNESS_AIDS)
+    recipient = create_identifier(recipient_client, recipient_name, wits=TEST_WITNESS_AIDS)
+
+    exchange_agent_oobis(sender_client_a, member_a_name, sender_client_b, member_b_name)
+    recipient_oobi = recipient_client.oobis().get(recipient_name, role="agent")["oobis"][0]
+    resolve_oobi(sender_client_a, recipient_oobi, alias=recipient_name)
+    resolve_oobi(sender_client_b, recipient_oobi, alias=recipient_name)
+
+    group_a, group_b = create_multisig_group(
+        sender_client_a,
+        member_a_name,
+        sender_client_b,
+        member_b_name,
+        group_name,
+        wits=TEST_WITNESS_AIDS,
+    )
+    assert group_a["prefix"] == group_b["prefix"]
+    group_oobi = expose_multisig_agent_oobi(
+        sender_client_a,
+        member_a_name,
+        sender_client_b,
+        member_b_name,
+        group_name,
+    )
+    resolve_oobi(recipient_client, group_oobi, alias=group_name)
+
+    stamp = helping.nowIso8601()
+    apply, sigs, atc = sender_client_a.ipex().apply(
+        group_name,
+        recipient["prefix"],
+        QVI_SCHEMA_SAID,
+        attributes={"LEI": LE_DATA["LEI"]},
+        dt=stamp,
+    )
+    operation_a = sender_client_a.ipex().submitApply(
+        group_name,
+        exn=apply,
+        sigs=sigs,
+        recp=[recipient["prefix"]],
+    )
+
+    seal = eventing.SealEvent(
+        i=group_a["prefix"],
+        s=group_a["state"]["ee"]["s"],
+        d=group_a["state"]["ee"]["d"],
+    )
+    apply_ims = eventing.messagize(
+        serder=apply,
+        sigers=[csigning.Siger(qb64=sig) for sig in sigs],
+        seal=seal,
+    )
+    apply_ims.extend(atc.encode("utf-8"))
+    sender_client_a.exchanges().send(
+        member_a_name,
+        "multisig",
+        sender=member_a,
+        route="/multisig/exn",
+        payload=dict(gid=group_a["prefix"]),
+        embeds=dict(exn=apply_ims),
+        recipients=[member_b["prefix"]],
+    )
+
+    note, proposal = wait_for_exchange_message(
+        sender_client_b,
+        "/multisig/exn",
+        embedded_route="/ipex/apply",
+    )
+    assert proposal["exn"]["e"]["exn"]["d"] == apply.said
+    operation_b = sender_client_b.ipex().join(group_name, note["a"]["d"])
+
+    wait_for_operation(sender_client_a, operation_a)
+    wait_for_operation(sender_client_b, operation_b)
+
+    recipient_note = wait_for_notification(recipient_client, "/exn/ipex/apply")
+    assert recipient_note["a"]["d"] == apply.said
+    recipient_exchange = wait_for_exchange(
+        recipient_client,
+        apply.said,
+        expected_route="/ipex/apply",
+    )
+    assert recipient_exchange["exn"]["d"] == apply.said
 
 
 def test_single_sig_issuer_to_multisig_holder_credential_issue(client_factory):
