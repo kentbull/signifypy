@@ -83,6 +83,15 @@ PORT_POLL_INTERVAL = float(os.getenv("SIGNIFYPY_INTEGRATION_PORT_POLL_INTERVAL",
 
 # Runtime, dependency, and config helpers
 
+
+def _prepare_schema_directory(runtime_root: Path) -> Path:
+    """Overlay integration-owned schemas on the pinned vLEI schema set."""
+    schema_dir = runtime_root / "schemas"
+    shutil.copytree(VLEI_ROOT / "schema" / "acdc", schema_dir)
+    shutil.copy2(UNTARGETED_SCHEMA_PATH, schema_dir / UNTARGETED_SCHEMA_PATH.name)
+    return schema_dir
+
+
 def _require_python(path: Path, name: str) -> str:
     """Return the runtime path or fail when that repo-local interpreter is unavailable."""
     if not path.exists():
@@ -584,10 +593,3 @@ def isolated_client_factory(isolated_live_stack):
     boundaries. Most business-workflow tests should stay on `client_factory`.
     """
     return _client_factory(isolated_live_stack)
-def _prepare_schema_directory(runtime_root: Path) -> Path:
-    """Overlay integration-owned schemas on the pinned vLEI schema set."""
-    schema_dir = runtime_root / "schemas"
-    shutil.copytree(VLEI_ROOT / "schema" / "acdc", schema_dir)
-    shutil.copy2(UNTARGETED_SCHEMA_PATH, schema_dir / UNTARGETED_SCHEMA_PATH.name)
-    return schema_dir
-
