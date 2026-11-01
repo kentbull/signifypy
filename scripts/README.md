@@ -4,7 +4,7 @@ The old manual workflow scripts that used to live in this directory have been
 retired.
 
 Those scenarios now belong to the pytest-managed integration harness in
-[`tests/integration`](/Users/kbull/code/keri/kentbull/signifypy/tests/integration),
+[`tests/integration`](/Users/kbull/enc/keri/signify/wot-upstream/signifypy/tests/integration),
 which starts witnesses, KERIA, and `vlei-server` itself instead of requiring
 multiple external terminal sessions.
 
