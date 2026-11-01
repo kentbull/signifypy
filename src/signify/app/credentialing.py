@@ -21,8 +21,8 @@ Rule of thumb:
 """
 from collections import namedtuple
 
-from keri.core import coring, counting, serdering
-from keri.core.eventing import TraitDex, interact
+from keri.core import coring, counting, indexing, serdering
+from keri.core.eventing import SealEvent, TraitDex, interact, messagize
 from keri.help import helping
 from keri.vc import proving
 from keri.vdr import eventing
@@ -914,6 +914,130 @@ class Ipex:
         if isinstance(attachment, str):
             attachment = attachment.encode("utf-8")
         return bytes(raw) + bytes(attachment)
+
+    @staticmethod
+    def _attachment_bytes(attachment):
+        """Normalize KERIA exchange attachment material to bytes."""
+        if attachment is None:
+            return b""
+        if isinstance(attachment, (list, tuple)):
+            attachment = "".join(attachment)
+        if isinstance(attachment, str):
+            return attachment.encode("utf-8")
+        return bytes(attachment)
+
+    @staticmethod
+    def _local_member(group_hab):
+        """Return the local member habitat embedded in a group habitat record."""
+        try:
+            return group_hab["group"]["mhab"]
+        except KeyError as e:
+            raise ValueError("identifier is not a multisig group habitat") from e
+
+    @staticmethod
+    def _ipex_join_path(route):
+        """Return the KERIA IPEX endpoint path suffix for a supported route."""
+        paths = {
+            "/ipex/apply": "apply",
+            "/ipex/offer": "offer",
+            "/ipex/agree": "agree",
+            "/ipex/grant": "grant",
+            "/ipex/admit": "admit",
+        }
+        if route not in paths:
+            raise ValueError(f"unsupported embedded IPEX route {route}")
+        return paths[route]
+
+    def _validate_join_exchange(self, group_hab, exchange):
+        """Validate and return the embedded IPEX event from a multisig proposal."""
+        outer = exchange.get("exn")
+        if not outer:
+            raise ValueError("exchange response missing exn")
+        if outer.get("r") != "/multisig/exn":
+            raise ValueError(f"expected /multisig/exn, got {outer.get('r')}")
+
+        gid = outer.get("a", {}).get("gid")
+        if gid != group_hab["prefix"]:
+            raise ValueError(f"multisig proposal gid {gid} does not match group {group_hab['prefix']}")
+
+        embedded = outer.get("e", {}).get("exn")
+        if embedded is None:
+            raise ValueError("multisig proposal missing embedded exn")
+        if embedded.get("i") != group_hab["prefix"]:
+            raise ValueError(
+                f"embedded IPEX sender {embedded.get('i')} does not match group {group_hab['prefix']}"
+            )
+        if not embedded.get("a", {}).get("i"):
+            raise ValueError("embedded IPEX message missing recipient a.i")
+
+        self._ipex_join_path(embedded.get("r"))
+        return embedded
+
+    def _sign_joined_ipex(self, group_hab, serder):
+        """Sign an embedded group IPEX EXN and return sigs plus attachment material."""
+        keeper = self.client.manager.get(group_hab)
+        sigs = keeper.sign(ser=serder.raw)
+        seal = SealEvent(
+            i=group_hab["prefix"],
+            s=group_hab["state"]["ee"]["s"],
+            d=group_hab["state"]["ee"]["d"],
+        )
+        sigers = [indexing.Siger(qb64=sig) for sig in sigs]
+        ims = messagize(serder=serder, sigers=sigers, seal=seal)
+        return sigs, bytes(ims[serder.size:])
+
+    def join(self, name, said):
+        """Approve a received multisig IPEX proposal by outer ``/multisig/exn`` SAID.
+
+        This is the Signify client equivalent of KERIpy's ``ipex join`` flow:
+        fetch the stored multisig proposal, sign its embedded IPEX message with
+        the local group keeper, submit it through the matching KERIA IPEX
+        endpoint, and mirror the approval to peer signing members.
+        """
+        group_hab = self._hab(name)
+        local_member = self._local_member(group_hab)
+        exchange = self.client.exchanges().get(said)
+        embedded = self._validate_join_exchange(group_hab, exchange)
+        route = embedded["r"]
+        endpoint = self._ipex_join_path(route)
+        ipex_recipient = embedded["a"]["i"]
+
+        members = self.client.identifiers().members(name)
+        local_member_pre = local_member["prefix"]
+        peer_recipients = [member["aid"] for member in members["signing"] if member["aid"] != local_member_pre]
+        if not peer_recipients:
+            raise ValueError("no peer signing members available for multisig IPEX join")
+
+        serder = serdering.SerderKERI(sad=embedded)
+        _, local_atc = self._sign_joined_ipex(group_hab, serder)
+        proposal_atc = self._attachment_bytes(exchange.get("pathed", {}).get("exn"))
+        joined_stream = bytes(serder.raw) + local_atc + proposal_atc
+
+        outer, outer_sigs, outer_atc = self.client.exchanges().createExchangeMessage(
+            sender=local_member,
+            route="/multisig/exn",
+            payload=dict(gid=group_hab["prefix"]),
+            embeds=dict(exn=joined_stream),
+            recipient=ipex_recipient,
+        )
+
+        body = dict(
+            exn=outer.ked,
+            sigs=outer_sigs,
+            atc=outer_atc,
+            rec=[ipex_recipient],
+        )
+        res = self.client.post(f"/identifiers/{name}/ipex/{endpoint}", json=body)
+        self.client.exchanges().send(
+            local_member["name"],
+            "multisig",
+            sender=local_member,
+            route="/multisig/exn",
+            payload=dict(gid=group_hab["prefix"]),
+            embeds=dict(exn=joined_stream),
+            recipients=peer_recipients,
+        )
+        return res.json()
 
     def apply(
         self,

@@ -6,12 +6,199 @@ signify.app.test_credentialing module
 Testing credentialing with unit tests
 """
 import pytest
+import requests
+from keri.app.keeping import Algos
 from keri.core import eventing, coring
 from keri.peer import exchanging
 from keri.vdr import eventing as veventing
 from mockito import mock, verify, expect, ANY
 
 from signify.app import credentialing
+from signify.app.clienting import SignifyClient
+from signify.core import keeping as signify_keeping
+
+
+JOIN_PASSCODE = "abcdefghijklmnop01234"
+JOIN_PEER_PASSCODE = "zyxwvutsrqponmlkjih12"
+JOIN_RECIPIENT_PASSCODE = "01234abcdefghijklmnop"
+JOIN_BASE = "http://keria.example"
+JOIN_GROUP_NAME = "group"
+JOIN_LOCAL_MEMBER_NAME = "local"
+JOIN_PEER_MEMBER_NAME = "peer"
+JOIN_RECIPIENT_NAME = "recipient"
+JOIN_DATE = "2026-01-01T00:00:00.000000+00:00"
+
+
+def _hab_state(serder):
+    ked = serder.ked
+    return {
+        "vn": [1, 0],
+        "i": serder.pre,
+        "s": ked["s"],
+        "d": serder.said,
+        "ee": ked,
+        "kt": ked["kt"],
+        "k": ked["k"],
+        "nt": ked["nt"],
+        "n": ked["n"],
+        "bt": ked["bt"],
+        "b": ked["b"],
+        "p": ked.get("p", ""),
+        "f": "",
+        "dt": JOIN_DATE,
+        "et": ked["t"],
+        "c": ked.get("c", []),
+        "di": ked.get("di", ""),
+    }
+
+
+def _member_hab(client, name, bran):
+    keeper = client.manager.new(Algos.salty, 0, bran=bran)
+    keys, ndigs = keeper.incept(transferable=True)
+    serder = eventing.incept(
+        keys=keys,
+        isith="1",
+        nsith="1",
+        ndigs=ndigs,
+        code=coring.MtrDex.Blake3_256,
+        wits=[],
+        toad="0",
+        cnfg=[],
+        data=[],
+    )
+    return {
+        "name": name,
+        "prefix": serder.pre,
+        Algos.salty: keeper.params(),
+        "transferable": True,
+        "state": _hab_state(serder),
+        "windexes": [],
+    }
+
+
+def _group_hab(client, name, member, peer):
+    states = [member["state"], peer["state"]]
+    keeper = client.manager.new(
+        Algos.group,
+        0,
+        mhab=member,
+        states=states,
+        rstates=states,
+    )
+    keys, ndigs = keeper.incept()
+    serder = eventing.incept(
+        keys=keys,
+        isith="1",
+        nsith="1",
+        ndigs=ndigs,
+        code=coring.MtrDex.Blake3_256,
+        wits=[],
+        toad="0",
+        cnfg=[],
+        data=[],
+    )
+    return {
+        "name": name,
+        "prefix": serder.pre,
+        Algos.group: keeper.params(),
+        "transferable": True,
+        "state": _hab_state(serder),
+        "windexes": [],
+    }
+
+
+def _mock_response(make_mock_response, payload):
+    return make_mock_response({"ok": True, "status_code": 200, "json": lambda: payload})
+
+
+def _inner_ipex(route="/ipex/apply", *, sender, recipient):
+    payload = {"m": ""}
+    if route == "/ipex/apply":
+        payload |= {"s": "schema-said", "a": {}}
+
+    serder, _ = exchanging.exchange(
+        route=route,
+        payload=payload,
+        sender=sender,
+        recipient=recipient,
+        date=JOIN_DATE,
+    )
+    return serder
+
+
+def _outer_exchange(inner, *, gid, route="/multisig/exn", proposal_atc="ABCDEFGH"):
+    return {
+        "exn": {
+            "r": route,
+            "a": {"gid": gid},
+            "e": {"exn": inner.ked},
+        },
+        "pathed": {"exn": proposal_atc},
+    }
+
+
+def _join_harness(
+    make_mock_response,
+    *,
+    route="/ipex/apply",
+    proposal_atc="ABCDEFGH",
+    exchange_factory=None,
+    members_factory=None,
+    expect_posts=True,
+):
+    client = SignifyClient(passcode=JOIN_PASSCODE, url=JOIN_BASE)
+    client.base = JOIN_BASE
+    client.session = mock(spec=requests.Session, strict=True)
+    client.mgr = signify_keeping.Manager(salter=client.ctrl.salter)
+
+    member = _member_hab(client, JOIN_LOCAL_MEMBER_NAME, JOIN_PASSCODE)
+    peer = _member_hab(client, JOIN_PEER_MEMBER_NAME, JOIN_PEER_PASSCODE)
+    recipient = _member_hab(client, JOIN_RECIPIENT_NAME, JOIN_RECIPIENT_PASSCODE)
+    group = _group_hab(client, JOIN_GROUP_NAME, member, peer)
+    inner = _inner_ipex(route, sender=group["prefix"], recipient=recipient["prefix"])
+    habitats = dict(group=group, member=member, peer=peer, recipient=recipient)
+    exchange = (
+        exchange_factory(habitats, inner)
+        if exchange_factory is not None
+        else _outer_exchange(inner, gid=group["prefix"], proposal_atc=proposal_atc)
+    )
+    members = (
+        members_factory(habitats)
+        if members_factory is not None
+        else {
+            "signing": [{"aid": member["prefix"]}, {"aid": peer["prefix"]}],
+            "rotation": [{"aid": member["prefix"]}, {"aid": peer["prefix"]}],
+        }
+    )
+    posts = []
+
+    expect(client.session, times=1).get(f"{JOIN_BASE}/identifiers/{JOIN_GROUP_NAME}").thenReturn(
+        _mock_response(make_mock_response, group)
+    )
+    expect(client.session, times=1).get(f"{JOIN_BASE}/exchanges/outer-said").thenReturn(
+        _mock_response(make_mock_response, exchange)
+    )
+    expect(client.session, times=1).get(f"{JOIN_BASE}/identifiers/{JOIN_GROUP_NAME}/members").thenReturn(
+        _mock_response(make_mock_response, members)
+    )
+
+    if expect_posts:
+        endpoint = credentialing.Ipex._ipex_join_path(route)
+
+        def capture_post(url, json):
+            posts.append({"path": url.removeprefix(JOIN_BASE), "json": json})
+            return _mock_response(make_mock_response, {"name": "exchange.op", "done": False})
+
+        expect(
+            client.session,
+            times=1,
+        ).post(f"{JOIN_BASE}/identifiers/{JOIN_GROUP_NAME}/ipex/{endpoint}", json=ANY).thenAnswer(capture_post)
+        expect(
+            client.session,
+            times=1,
+        ).post(f"{JOIN_BASE}/identifiers/{JOIN_LOCAL_MEMBER_NAME}/exchanges", json=ANY).thenAnswer(capture_post)
+
+    return client, habitats, inner, posts
 
 
 def test_registries_legacy_create_returns_registry_result(make_mock_client_with_manager, make_mock_response):
@@ -1048,3 +1235,138 @@ def test_submit_grant():
     rep = ipex.submitGrant("aid1", exn=mock_admit, sigs=mock_gsigs, atc=mock_end, recp=recp)
 
     assert rep == dict(b='c')
+
+
+def test_ipex_join_apply_posts_multisig_exn_with_original_proposal_attachment(make_mock_response):
+    client, habitats, inner, posts = _join_harness(make_mock_response, proposal_atc="PROPATC8")
+
+    result = credentialing.Ipex(client).join("group", "outer-said")
+
+    assert result == {"name": "exchange.op", "done": False}
+    assert len(posts) == 2
+    post = posts[0]
+    assert post["path"] == "/identifiers/group/ipex/apply"
+    body = post["json"]
+    assert body["rec"] == [habitats["recipient"]["prefix"]]
+    assert body["exn"]["r"] == "/multisig/exn"
+    assert body["exn"]["a"]["gid"] == habitats["group"]["prefix"]
+    assert body["exn"]["e"]["exn"]["d"] == inner.said
+    assert body["exn"]["e"]["exn"]["r"] == "/ipex/apply"
+    assert "PROPATC8" in body["atc"]
+    assert body["sigs"]
+
+    peer_post = posts[1]
+    assert peer_post["path"] == "/identifiers/local/exchanges"
+    assert peer_post["json"]["rec"] == [habitats["peer"]["prefix"]]
+    assert peer_post["json"]["exn"]["r"] == "/multisig/exn"
+    assert peer_post["json"]["exn"]["e"]["exn"]["d"] == inner.said
+    assert "PROPATC8" in peer_post["json"]["atc"]
+    assert peer_post["json"]["sigs"]
+
+
+@pytest.mark.parametrize(
+    "route,endpoint",
+    [
+        ("/ipex/apply", "apply"),
+        ("/ipex/offer", "offer"),
+        ("/ipex/agree", "agree"),
+        ("/ipex/grant", "grant"),
+        ("/ipex/admit", "admit"),
+    ],
+)
+def test_ipex_join_dispatches_supported_ipex_routes(route, endpoint, make_mock_response):
+    client, _, _, posts = _join_harness(make_mock_response, route=route)
+
+    credentialing.Ipex(client).join("group", "outer-said")
+
+    assert posts[0]["path"] == f"/identifiers/group/ipex/{endpoint}"
+
+
+@pytest.mark.parametrize(
+    "exchange,match",
+    [
+        (
+            lambda habitats, inner: _outer_exchange(
+                inner,
+                gid=habitats["group"]["prefix"],
+                route="/ipex/apply",
+            ),
+            "expected /multisig/exn",
+        ),
+        (
+            lambda habitats, inner: _outer_exchange(inner, gid=habitats["peer"]["prefix"]),
+            "does not match group",
+        ),
+        (
+            lambda habitats, inner: {
+                "exn": {
+                    "r": "/multisig/exn",
+                    "a": {"gid": habitats["group"]["prefix"]},
+                    "e": {},
+                },
+                "pathed": {},
+            },
+            "missing embedded exn",
+        ),
+        (
+            lambda habitats, inner: {
+                "exn": {
+                    "r": "/multisig/exn",
+                    "a": {"gid": habitats["group"]["prefix"]},
+                    "e": {"exn": {**inner.ked, "i": habitats["peer"]["prefix"]}},
+                },
+                "pathed": {},
+            },
+            "does not match group",
+        ),
+        (
+            lambda habitats, inner: {
+                "exn": {
+                    "r": "/multisig/exn",
+                    "a": {"gid": habitats["group"]["prefix"]},
+                    "e": {"exn": {**inner.ked, "a": {"m": ""}}},
+                },
+                "pathed": {},
+            },
+            "missing recipient",
+        ),
+        (
+            lambda habitats, inner: _outer_exchange(
+                _inner_ipex(
+                    "/ipex/spurn",
+                    sender=habitats["group"]["prefix"],
+                    recipient=habitats["recipient"]["prefix"],
+                ),
+                gid=habitats["group"]["prefix"],
+            ),
+            "unsupported embedded IPEX route",
+        ),
+    ],
+)
+def test_ipex_join_rejects_invalid_multisig_ipex_proposals(exchange, match, make_mock_response):
+    def exchange_factory(habitats, inner):
+        return exchange(habitats, inner)
+
+    client, _, _, posts = _join_harness(
+        make_mock_response,
+        exchange_factory=exchange_factory,
+        expect_posts=False,
+    )
+
+    with pytest.raises(ValueError, match=match):
+        credentialing.Ipex(client).join("group", "outer-said")
+
+    assert posts == []
+
+
+def test_ipex_join_requires_peer_signing_members(make_mock_response):
+    client, _, _, posts = _join_harness(
+        make_mock_response,
+        members_factory=lambda habitats: {"signing": [{"aid": habitats["member"]["prefix"]}], "rotation": []},
+        expect_posts=False,
+    )
+
+    with pytest.raises(ValueError, match="no peer signing members"):
+        credentialing.Ipex(client).join("group", "outer-said")
+
+    assert posts == []
