@@ -398,7 +398,9 @@ def _launch_live_stack(live_stack: dict):
 
     witness_env = shared_env.copy()
     keria_env = shared_env.copy()
-    keria_env["PYTHONPATH"] = str(KERIA_ROOT / "src")
+    keria_env["PYTHONPATH"] = os.pathsep.join(
+        (str(KERIA_ROOT / "src"), str(KERIPY_ROOT / "src"))
+    )
 
     vlei_env = shared_env.copy()
     vlei_env["PYTHONPATH"] = str(VLEI_ROOT / "src")
