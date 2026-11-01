@@ -9,7 +9,8 @@ instead of the stored exchanges and credentials they point to.
 from __future__ import annotations
 
 import pytest
-from keri.core import coring
+from keri.core import coring, eventing
+from keri.core import signing as csigning
 from keri.help import helping
 
 from .constants import ADDITIONAL_SCHEMA_OOBI_SAIDS, QVI_SCHEMA_SAID, TEST_WITNESS_AIDS
@@ -32,6 +33,7 @@ from .helpers import (
     submit_multisig_admit,
     wait_for_credential,
     wait_for_exchange,
+    wait_for_exchange_message,
     wait_for_filtered_credential,
     wait_for_issued_credential,
     wait_for_multisig_credential_state_convergence,
@@ -70,6 +72,37 @@ OOR_DATA = {
     "personLegalName": "John Doe",
     "officialRole": "HR Manager",
 }
+
+
+def _mirror_multisig_ipex_apply_to_peer_member(
+    client,
+    *,
+    local_member_name: str,
+    local_member: dict,
+    group_hab: dict,
+    apply,
+    apply_sigs: list[str],
+    other_member_prefix: str,
+) -> None:
+    seal = eventing.SealEvent(
+        i=group_hab["prefix"],
+        s=group_hab["state"]["ee"]["s"],
+        d=group_hab["state"]["ee"]["d"],
+    )
+    apply_ims = eventing.messagize(
+        serder=apply,
+        sigers=[csigning.Siger(qb64=sig) for sig in apply_sigs],
+        seal=seal,
+    )
+    client.exchanges().send(
+        local_member_name,
+        "multisig",
+        sender=local_member,
+        route="/multisig/exn",
+        payload=dict(gid=group_hab["prefix"]),
+        embeds=dict(exn=apply_ims),
+        recipients=[other_member_prefix],
+    )
 
 
 def _normalized_registry_state(registry: dict) -> dict:
@@ -273,6 +306,140 @@ def _assert_filtered_contains(client, *, schema_said: str, subject_prefix: str, 
     """Assert one issuer-side filtered list contains the expected credential SAID."""
     filtered = client.credentials().list(filter={"-s": schema_said, "-a-i": subject_prefix})
     assert any(credential["sad"]["d"] == said for credential in filtered)
+
+
+def test_outbound_multisig_ipex_apply_does_not_notify_sender_members(client_factory):
+    """Probe whether locally parsed multisig IPEX messages notify senders.
+
+    The recipient group should receive the apply as actionable inbound work.
+    The sender group members should not receive `/exn/ipex/apply` notifications
+    for the group-originated apply they just submitted.
+    """
+    sender_client_a = client_factory()
+    sender_client_b = client_factory()
+    recipient_client_a = client_factory()
+    recipient_client_b = client_factory()
+
+    sender_member_a_name = alias("sender-a")
+    sender_member_b_name = alias("sender-b")
+    recipient_member_a_name = alias("recipient-a")
+    recipient_member_b_name = alias("recipient-b")
+    sender_group_name = alias("sender-group")
+    recipient_group_name = alias("recipient-group")
+
+    sender_member_a = create_identifier(sender_client_a, sender_member_a_name, wits=TEST_WITNESS_AIDS)
+    sender_member_b = create_identifier(sender_client_b, sender_member_b_name, wits=TEST_WITNESS_AIDS)
+    recipient_member_a = create_identifier(recipient_client_a, recipient_member_a_name, wits=TEST_WITNESS_AIDS)
+    recipient_member_b = create_identifier(recipient_client_b, recipient_member_b_name, wits=TEST_WITNESS_AIDS)
+
+    exchange_agent_oobis(sender_client_a, sender_member_a_name, sender_client_b, sender_member_b_name)
+    exchange_agent_oobis(recipient_client_a, recipient_member_a_name, recipient_client_b, recipient_member_b_name)
+
+    sender_group_a, sender_group_b = create_multisig_group(
+        sender_client_a,
+        sender_member_a_name,
+        sender_client_b,
+        sender_member_b_name,
+        sender_group_name,
+        wits=TEST_WITNESS_AIDS,
+    )
+    recipient_group_a, recipient_group_b = create_multisig_group(
+        recipient_client_a,
+        recipient_member_a_name,
+        recipient_client_b,
+        recipient_member_b_name,
+        recipient_group_name,
+        wits=TEST_WITNESS_AIDS,
+    )
+    sender_group_oobi = expose_multisig_agent_oobi(
+        sender_client_a,
+        sender_member_a_name,
+        sender_client_b,
+        sender_member_b_name,
+        sender_group_name,
+    )
+    recipient_group_oobi = expose_multisig_agent_oobi(
+        recipient_client_a,
+        recipient_member_a_name,
+        recipient_client_b,
+        recipient_member_b_name,
+        recipient_group_name,
+    )
+    resolve_oobi(sender_client_a, recipient_group_oobi, alias=recipient_group_name)
+    resolve_oobi(sender_client_b, recipient_group_oobi, alias=recipient_group_name)
+    resolve_oobi(recipient_client_a, sender_group_oobi, alias=sender_group_name)
+    resolve_oobi(recipient_client_b, sender_group_oobi, alias=sender_group_name)
+
+    timestamp = "2026-03-25T00:00:00.000000+00:00"
+    apply_a, apply_sigs_a, _ = sender_client_a.ipex().apply(
+        sender_group_name,
+        recipient_group_a["prefix"],
+        QVI_SCHEMA_SAID,
+        attributes={"LEI": LE_DATA["LEI"]},
+        dt=timestamp,
+    )
+    operation_a = sender_client_a.ipex().submitApply(
+        sender_group_name,
+        apply_a,
+        apply_sigs_a,
+        [recipient_group_a["prefix"]],
+    )
+    _mirror_multisig_ipex_apply_to_peer_member(
+        sender_client_a,
+        local_member_name=sender_member_a_name,
+        local_member=sender_member_a,
+        group_hab=sender_group_a,
+        apply=apply_a,
+        apply_sigs=apply_sigs_a,
+        other_member_prefix=sender_member_b["prefix"],
+    )
+
+    wait_for_exchange_message(sender_client_b, "/multisig/exn", embedded_route="/ipex/apply")
+    apply_b, apply_sigs_b, _ = sender_client_b.ipex().apply(
+        sender_group_name,
+        recipient_group_b["prefix"],
+        QVI_SCHEMA_SAID,
+        attributes={"LEI": LE_DATA["LEI"]},
+        dt=timestamp,
+    )
+    operation_b = sender_client_b.ipex().submitApply(
+        sender_group_name,
+        apply_b,
+        apply_sigs_b,
+        [recipient_group_b["prefix"]],
+    )
+    _mirror_multisig_ipex_apply_to_peer_member(
+        sender_client_b,
+        local_member_name=sender_member_b_name,
+        local_member=sender_member_b,
+        group_hab=sender_group_b,
+        apply=apply_b,
+        apply_sigs=apply_sigs_b,
+        other_member_prefix=sender_member_a["prefix"],
+    )
+
+    wait_for_operation(sender_client_a, operation_a)
+    wait_for_operation(sender_client_b, operation_b)
+    _, recipient_note = wait_for_notification_any(
+        [recipient_client_a, recipient_client_b],
+        "/exn/ipex/apply",
+    )
+    sender_notes = {
+        "sender_a": [
+            note
+            for note in sender_client_a.notifications().list()["notes"]
+            if note["a"].get("r") == "/exn/ipex/apply" and note["a"].get("d") == apply_a.said
+        ],
+        "sender_b": [
+            note
+            for note in sender_client_b.notifications().list()["notes"]
+            if note["a"].get("r") == "/exn/ipex/apply" and note["a"].get("d") == apply_a.said
+        ],
+    }
+
+    assert apply_b.said == apply_a.said
+    assert recipient_note["a"]["d"] == apply_a.said
+    assert sender_notes == {"sender_a": [], "sender_b": []}
 
 
 def test_single_sig_issuer_to_multisig_holder_credential_issue(client_factory):

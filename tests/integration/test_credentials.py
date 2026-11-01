@@ -184,6 +184,45 @@ def test_credential_presentation_grant_admit(client_factory):
     assert exported
 
 
+def test_outbound_ipex_apply_does_not_notify_sender(client_factory):
+    """Probe whether outbound local IPEX parsing creates sender notifications.
+
+    The recipient should receive an actionable apply notification. The sender's
+    local parse should only verify/store the outbound EXN, not put the sender's
+    own message into their notification inbox.
+    """
+    sender_client = client_factory()
+    recipient_client = client_factory()
+    sender_name = alias("sender")
+    recipient_name = alias("recipient")
+
+    create_identifier(sender_client, sender_name, wits=TEST_WITNESS_AIDS)
+    recipient = create_identifier(recipient_client, recipient_name, wits=TEST_WITNESS_AIDS)
+    exchange_agent_oobis(sender_client, sender_name, recipient_client, recipient_name)
+
+    apply, apply_sigs, _ = sender_client.ipex().apply(
+        sender_name,
+        recipient["prefix"],
+        QVI_SCHEMA_SAID,
+        attributes={"LEI": "5493001KJTIIGC8Y1R17"},
+        dt="2026-03-25T00:00:00.000000+00:00",
+    )
+    wait_for_operation(
+        sender_client,
+        sender_client.ipex().submitApply(sender_name, apply, apply_sigs, [recipient["prefix"]]),
+    )
+
+    recipient_note = wait_for_notification(recipient_client, "/exn/ipex/apply")
+    sender_notes = [
+        note
+        for note in sender_client.notifications().list()["notes"]
+        if note["a"].get("r") == "/exn/ipex/apply" and note["a"].get("d") == apply.said
+    ]
+
+    assert recipient_note["a"]["d"] == apply.said
+    assert sender_notes == []
+
+
 def test_ipex_apply_offer_agree_grant_admit(client_factory):
     """Prove the full single-sig IPEX conversation path, not just presentation.
 
